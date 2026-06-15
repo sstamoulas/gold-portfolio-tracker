@@ -23,11 +23,15 @@ GRAMS_PER_ONCE = 31.1034768
 # ----------------------------------------------------
 try:
     DB_URL = st.secrets["db_url"]
-    engine = create_engine(DB_URL)
+    # Added pool_pre_ping to check and clear stale connections instantly
+    engine = create_engine(
+        DB_URL, 
+        pool_pre_ping=True,
+        pool_recycle=300
+    )
 except Exception as e:
     st.error("Missing database connection details. Please set up 'db_url' in your Streamlit Secrets.")
     st.stop()
-
 
 def add_callback():
     """Isolated callback to handle dynamic input calculations and save to Supabase."""
