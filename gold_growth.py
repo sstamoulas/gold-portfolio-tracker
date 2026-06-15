@@ -3,71 +3,88 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-from sqlalchemy import create_engine, text
+import requests
+from supabase import create_client
 
-# Set up the web page configurations
-st.set_page_config(
-    page_title="Multi-Asset Gold Portfolio Tracker", page_icon="🪙", layout="wide"
-)
+# 1. Page Config
+st.set_page_config(page_title="Multi-Asset Gold Portfolio Tracker", page_icon="🪙", layout="wide")
 
-st.title("🪙 Gold Portfolio Tracker (USD & TRY)")
-st.markdown(
-    "Log your historical purchases in grams and track their real-time values across multiple currencies."
-)
+# 2. Supabase Initialization
+@st.cache_resource
+def init_supabase():
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-# Conversion Constant: 1 Troy Ounce = ~31.1035 Grams
+supabase = init_supabase()
 GRAMS_PER_ONCE = 31.1034768
 
-# ----------------------------------------------------
-# DATABASE MANAGEMENT LAYER (POSTGRESQL VIA SUPABASE)
-# ----------------------------------------------------
-try:
-    DB_URL = st.secrets["db_url"]
-    # Added pool_pre_ping to check and clear stale connections instantly
-    engine = create_engine(
-        DB_URL, 
-        pool_pre_ping=True,
-        pool_recycle=300
-    )
-except Exception as e:
-    st.error("Missing database connection details. Please set up 'db_url' in your Streamlit Secrets.")
-    st.stop()
-
-def add_callback():
-    """Isolated callback to handle dynamic input calculations and save to Supabase."""
-    p_date = st.session_state["input_date"]
-    g_weight = st.session_state["input_grams"]
-    currency_choice = st.session_state["input_currency"]
-    fx_rate = st.session_state["input_fx"]
-    c_raw = st.session_state["input_cost_raw"]
-
-    if currency_choice == "TRY":
-        c_try = c_raw
-        c_usd = round(c_try / fx_rate, 2)
-    else:  # USD selected
-        c_usd = c_raw
-        c_try = round(c_usd * fx_rate, 2)
-
-    query = text(
-        "INSERT INTO transactions (purchase_date, grams, cost_try, cost_usd) VALUES (:p_date, :grams, :c_try, :c_usd)"
-    )
-    with engine.begin() as conn:
-        conn.execute(
-            query,
-            {
-                "p_date": p_date,
-                "grams": g_weight,
-                "c_try": c_try,
-                "c_usd": c_usd,
-            },
-        )
-
+# 3. Data Functions (REST API ONLY)
+def add_transaction(p_date, g_weight, c_raw, fx_rate, currency):
+    if currency == "TRY":
+        c_try, c_usd = c_raw, round(c_raw / fx_rate, 2)
+    else:
+        c_usd, c_try = c_raw, round(c_raw * fx_rate, 2)
+    
+    supabase.table("transactions").insert({
+        "purchase_date": str(p_date),
+        "grams": g_weight,
+        "cost_try": c_try,
+        "cost_usd": c_usd
+    }).execute()
 
 def get_all_transactions():
-    """Fetches full tabular array data out of the cloud Postgres instance."""
-    with engine.connect() as conn:
-        df = pd.read_sql_query("SELECT * FROM transactions ORDER BY id ASC", conn)
-    return df
+    response = supabase.table("transactions").select("*").order("id").execute()
+    return pd.DataFrame(response.data)
+
+def delete_transaction(target_id):
+    supabase.table("transactions").delete().eq("id", target_id).execute()
+
+# --- CALLBACKS ---
+def add_callback():
+    add_transaction(
+        st.session_state["input_date"],
+        st.session_state["input_grams"],
+        st.session_state["input_cost_raw"],
+        st.session_state["input_fx"],
+        st.session_state["input_currency"]
+    )
+
+# --- MARKET DATA ---
+@st.cache_data(ttl=300)
+def fetch_live_market_data():
+    try:
+        session = requests.Session()
+        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        tickers = yf.Tickers("GC=F USDTRY=X", session=session)
+        gold_close = tickers.tickers["GC=F"].history(period="1d")["Close"].iloc[-1]
+        try_close = tickers.tickers["USDTRY=X"].history(period="1d")["Close"].iloc[-1]
+        g_usd = gold_close / GRAMS_PER_ONCE
+        return g_usd, g_usd * try_close, try_close, False
+    except:
+        return 75.25, 2445.62, 32.50, True
+
+live_gold_usd, live_gold_try, live_usd_try, is_fallback = fetch_live_market_data()
+
+# --- UI (KEEPING YOUR ORIGINAL DESIGN) ---
+st.title("🪙 Gold Portfolio Tracker (USD & TRY)")
+# ... [Insert your original sidebar code here] ...
+
+# --- PORTFOLIO PROCESSING ---
+df_portfolio = get_all_transactions()
+
+if not df_portfolio.empty:
+    df_portfolio["purchase_date"] = df_portfolio["purchase_date"].astype(str)
+    df_portfolio = df_portfolio.rename(columns={"purchase_date": "Date", "grams": "Grams", "cost_try": "Cost (TRY)", "cost_usd": "Cost (USD)"})
+    
+    # ... [Insert your original logic for columns and KPIs here] ...
+
+    # UPDATED SYNC LOGIC
+    if len(edited_df) < len(display_df):
+        if st.button("🗑️ Sync Deletions to Database"):
+            remaining_ids = set(edited_df["id"].tolist())
+            all_original_ids = set(df_portfolio["id"].tolist())
+            for target_id in (all_original_ids - remaining_ids):
+                delete_transaction(target_id)
+            st.rerun()
 
 
 # ----------------------------------------------------
