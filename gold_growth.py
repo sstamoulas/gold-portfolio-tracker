@@ -21,7 +21,6 @@ GRAMS_PER_ONCE = 31.1034768
 # ----------------------------------------------------
 # DATABASE MANAGEMENT LAYER (POSTGRESQL VIA SUPABASE)
 # ----------------------------------------------------
-# This pulls the 'db_url' string you just pasted into your Streamlit Secrets box
 try:
     DB_URL = st.secrets["db_url"]
     engine = create_engine(DB_URL)
@@ -68,25 +67,42 @@ def get_all_transactions():
 
 
 # ----------------------------------------------------
-# FETCH LIVE MARKET DATA (Cached for 5 minutes)
+# FETCH LIVE MARKET DATA (With anti-rate-limiting headers)
 # ----------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_live_market_data():
-    tickers = yf.Tickers("GC=F USDTRY=X")
-    gold_close = tickers.tickers["GC=F"].history(period="1d")["Close"].iloc[-1]
-    try_close = tickers.tickers["USDTRY=X"].history(period="1d")["Close"].iloc[-1]
+    try:
+        # Create a custom session with custom browser headers to bypass yfinance blocks
+        import requests
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        
+        tickers = yf.Tickers("GC=F USDTRY=X", session=session)
+        gold_close = tickers.tickers["GC=F"].history(period="1d")["Close"].iloc[-1]
+        try_close = tickers.tickers["USDTRY=X"].history(period="1d")["Close"].iloc[-1]
 
-    gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
-    gold_price_per_gram_try = gold_price_per_gram_usd * try_close
+        gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
+        gold_price_per_gram_try = gold_price_per_gram_usd * try_close
+        
+        return gold_price_per_gram_usd, gold_price_per_gram_try, try_close, False
 
-    return gold_price_per_gram_usd, gold_price_per_gram_try, try_close
+    except Exception as e:
+        # Fallback values if Yahoo Finance continues to block the IP address completely
+        fallback_gold_usd = 75.25  # Rough baseline price per gram (~$2340/oz)
+        fallback_usd_try = 32.50   # Rough baseline conversion rate
+        fallback_gold_try = fallback_gold_usd * fallback_usd_try
+        
+        return fallback_gold_usd, fallback_gold_try, fallback_usd_try, True
 
 
-try:
-    live_gold_usd, live_gold_try, live_usd_try = fetch_live_market_data()
-except Exception as e:
-    st.error(f"Error fetching live exchange data from Yahoo Finance: {e}")
-    st.stop()
+# Execute data fetch
+live_gold_usd, live_gold_try, live_usd_try, is_fallback = fetch_live_market_data()
+
+# Warn the user beautifully if we are running on fallback data instead of crashing
+if is_fallback:
+    st.warning("⚠️ Yahoo Finance is temporarily rate-limiting connections. Displaying approximate baseline asset pricing for now.")
 
 # ----------------------------------------------------
 # SIDEBAR - DATA ENTRY LOG
@@ -147,9 +163,9 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
 df_portfolio = get_all_transactions()
 
 m_col1, m_col2, m_col3 = st.columns(3)
-m_col1.metric("Live Gold Price / Gram (USD)", f"${live_gold_usd:,.2f}")
-m_col2.metric("Live Gold Price / Gram (TRY)", f"{live_gold_try:,.2f} TL")
-m_col3.metric("Live Forex Exchange (USD/TRY)", f"{live_usd_try:,.4f}")
+m_col1.metric("Gold Price / Gram (USD)", f"${live_gold_usd:,.2f}")
+m_col2.metric("Gold Price / Gram (TRY)", f"{live_gold_try:,.2f} TL")
+m_col3.metric("Forex Exchange (USD/TRY)", f"{live_usd_try:,.4f}")
 
 st.markdown("---")
 
