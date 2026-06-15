@@ -1,9 +1,9 @@
 import datetime
-import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from sqlalchemy import create_engine, text
 
 # Set up the web page configurations
 st.set_page_config(
@@ -19,32 +19,19 @@ st.markdown(
 GRAMS_PER_ONCE = 31.1034768
 
 # ----------------------------------------------------
-# DATABASE MANAGEMENT LAYER
+# DATABASE MANAGEMENT LAYER (POSTGRESQL VIA SUPABASE)
 # ----------------------------------------------------
-DB_FILE = "gold_portfolio.db"
-
-
-def init_db():
-    """Initializes the local SQLite database and creates the transactions table."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            purchase_date TEXT,
-            grams REAL,
-            cost_try REAL,
-            cost_usd REAL
-        )
-    """
-    )
-    conn.commit()
-    conn.close()
+# This pulls the 'db_url' string you just pasted into your Streamlit Secrets box
+try:
+    DB_URL = st.secrets["db_url"]
+    engine = create_engine(DB_URL)
+except Exception as e:
+    st.error("Missing database connection details. Please set up 'db_url' in your Streamlit Secrets.")
+    st.stop()
 
 
 def add_callback():
-    """Isolated callback to handle dynamic input calculations and save to the database."""
+    """Isolated callback to handle dynamic input calculations and save to Supabase."""
     p_date = st.session_state["input_date"]
     g_weight = st.session_state["input_grams"]
     currency_choice = st.session_state["input_currency"]
@@ -58,26 +45,27 @@ def add_callback():
         c_usd = c_raw
         c_try = round(c_usd * fx_rate, 2)
 
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO transactions (purchase_date, grams, cost_try, cost_usd) VALUES (?, ?, ?, ?)",
-        (str(p_date), g_weight, c_try, c_usd),
+    query = text(
+        "INSERT INTO transactions (purchase_date, grams, cost_try, cost_usd) VALUES (:p_date, :grams, :c_try, :c_usd)"
     )
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(
+            query,
+            {
+                "p_date": p_date,
+                "grams": g_weight,
+                "c_try": c_try,
+                "c_usd": c_usd,
+            },
+        )
 
 
 def get_all_transactions():
-    """Fetches full tabular array data out of the SQLite file."""
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM transactions", conn)
-    conn.close()
+    """Fetches full tabular array data out of the cloud Postgres instance."""
+    with engine.connect() as conn:
+        df = pd.read_sql_query("SELECT * FROM transactions ORDER BY id ASC", conn)
     return df
 
-
-# Trigger DB setup sequence
-init_db()
 
 # ----------------------------------------------------
 # FETCH LIVE MARKET DATA (Cached for 5 minutes)
@@ -106,7 +94,6 @@ except Exception as e:
 st.sidebar.header("📝 Log Purchase Records")
 st.sidebar.markdown("Add your transaction details below:")
 
-# Currency selector
 chosen_currency = st.sidebar.radio(
     "Purchase Currency Base:",
     options=["TRY", "USD"],
@@ -114,7 +101,6 @@ chosen_currency = st.sidebar.radio(
     key="input_currency",
 )
 
-# Gram input outside the form container
 grams = st.sidebar.number_input(
     "Grams Purchased", min_value=0.1, value=10.0, step=1.0, key="input_grams"
 )
@@ -160,7 +146,6 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
 # ----------------------------------------------------
 df_portfolio = get_all_transactions()
 
-# Display real-time ticker values globally at the top
 m_col1, m_col2, m_col3 = st.columns(3)
 m_col1.metric("Live Gold Price / Gram (USD)", f"${live_gold_usd:,.2f}")
 m_col2.metric("Live Gold Price / Gram (TRY)", f"{live_gold_try:,.2f} TL")
@@ -168,12 +153,14 @@ m_col3.metric("Live Forex Exchange (USD/TRY)", f"{live_usd_try:,.4f}")
 
 st.markdown("---")
 
-# Check if portfolio has contents before continuing UI operations
 if df_portfolio.empty:
     st.info(
-        "ℹ️ Your portfolio database is currently empty! Fill out the forms on the left sidebar to add transactions."
+        "ℹ️ Your portfolio cloud database is currently empty! Fill out the forms on the left sidebar to add transactions."
     )
 else:
+    # Ensure standard string conversion for dates fetched from postgresql
+    df_portfolio["purchase_date"] = df_portfolio["purchase_date"].astype(str)
+    
     df_portfolio = df_portfolio.rename(
         columns={
             "purchase_date": "Date",
@@ -183,7 +170,6 @@ else:
         }
     )
 
-    # Compute live performance updates (Pre-rounding here ensures math consistency across modules)
     df_portfolio["Current Value (USD)"] = round(df_portfolio["Grams"] * live_gold_usd, 2)
     df_portfolio["Current Value (TRY)"] = round(df_portfolio["Grams"] * live_gold_try, 2)
     df_portfolio["Growth (USD)"] = round(
@@ -193,12 +179,10 @@ else:
         df_portfolio["Current Value (TRY)"] - df_portfolio["Cost (TRY)"], 2
     )
 
-    # Portfolio Aggregation Summaries
     total_grams = df_portfolio["Grams"].sum()
     total_cost_usd = df_portfolio["Cost (USD)"].sum()
     total_cost_try = df_portfolio["Cost (TRY)"].sum()
     
-    # FIXED: Summary calculations now sum the rounded columns directly to avoid a 1-cent discrepancy
     total_val_usd = df_portfolio["Current Value (USD)"].sum()
     total_val_try = df_portfolio["Current Value (TRY)"].sum()
     growth_usd = df_portfolio["Growth (USD)"].sum()
@@ -206,7 +190,6 @@ else:
     
     pct_growth_usd = (growth_usd / total_cost_usd) * 100 if total_cost_usd > 0 else 0
 
-    # Comprehensive Metrics Breakdown
     st.subheader("📊 Combined Portfolio Performance")
     kpi1, kpi2, kpi3 = st.columns(3)
     kpi1.metric("Total Weight Owned", f"{total_grams:.2f} grams")
@@ -223,7 +206,6 @@ else:
 
     st.markdown("---")
 
-    # Charting Layer
     st.subheader("📈 Value Comparison vs. Purchase Cost")
     fig = go.Figure()
     fig.add_trace(
@@ -251,47 +233,33 @@ else:
     st.plotly_chart(fig, use_container_width=True)
 
     # ----------------------------------------------------
-    # INTERACTIVE LEDGER (WITH INLINE / BULK DELETE)
+    # INTERACTIVE LEDGER (WITH DELETIONS)
     # ----------------------------------------------------
     st.subheader("📜 Historical Transaction Ledger")
     st.caption(
-        "💡 **To Delete Entries:** Click a row's left checkbox (or select multiple rows) and press **Backspace/Delete** on your keyboard, then click the Save button below."
+        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**, then sync below."
     )
 
-    # Format values cleanly for display while preserving raw database mappings
     display_df = df_portfolio.copy()
     display_df["Cost (USD)"] = display_df["Cost (USD)"].map("${:,.2f}".format)
-    display_df["Current Value (USD)"] = display_df["Current Value (USD)"].map(
-        "${:,.2f}".format
-    )
+    display_df["Current Value (USD)"] = display_df["Current Value (USD)"].map("${:,.2f}".format)
     display_df["Growth (USD)"] = display_df["Growth (USD)"].map("${:+,.2f}".format)
     display_df["Cost (TRY)"] = display_df["Cost (TRY)"].map("{:,.2f} TL".format)
-    display_df["Current Value (TRY)"] = display_df["Current Value (TRY)"].map(
-        "{:,.2f} TL".format
-    )
+    display_df["Current Value (TRY)"] = display_df["Current Value (TRY)"].map("{:,.2f} TL".format)
     display_df["Growth (TRY)"] = display_df["Growth (TRY)"].map("{:+,.2f} TL".format)
 
-    # Render interactive data table
     edited_df = st.data_editor(
         display_df,
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
         disabled=[
-            "id",
-            "Date",
-            "Grams",
-            "Cost (TRY)",
-            "Cost (USD)",
-            "Current Value (USD)",
-            "Current Value (TRY)",
-            "Growth (USD)",
-            "Growth (TRY)",
+            "id", "Date", "Grams", "Cost (TRY)", "Cost (USD)",
+            "Current Value (USD)", "Current Value (TRY)", "Growth (USD)", "Growth (TRY)"
         ],
         key="ledger_editor",
     )
 
-    # Ledger Totals Summary
     st.markdown("### 🧮 Ledger Totals Summary")
     t_col1, t_col2, t_col3, t_col4, t_col5, t_col6, t_col7 = st.columns(7)
     t_col1.markdown(f"**Total Grams:**\n{total_grams:.2f}g")
@@ -300,13 +268,11 @@ else:
     t_col4.markdown(f"**Current Value (USD):**\n${total_val_usd:,.2f}")
     t_col5.markdown(f"**Current Value (TRY):**\n{total_val_try:,.2f} TL")
     
-    # Format growth values with dynamic coloring markup strings
     g_usd_color = "green" if growth_usd >= 0 else "red"
     g_try_color = "green" if growth_try >= 0 else "red"
     t_col6.markdown(f"**Total Growth (USD):**\n<span style='color:{g_usd_color}; font-weight:bold;'>${growth_usd:+,.2f}</span>", unsafe_allow_html=True)
     t_col7.markdown(f"**Total Growth (TRY):**\n<span style='color:{g_try_color}; font-weight:bold;'>{growth_try:+,.2f} TL</span>", unsafe_allow_html=True)
 
-    # Database sync handler for deletions
     if len(edited_df) < len(display_df):
         st.markdown("")
         col_sync1, col_sync2 = st.columns([1, 4])
@@ -316,14 +282,10 @@ else:
                 all_original_ids = set(display_df["id"].tolist())
                 deleted_ids = all_original_ids - remaining_ids
 
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-                for target_id in deleted_ids:
-                    cursor.execute(
-                        "DELETE FROM transactions WHERE id = ?", (target_id,)
-                    )
-                conn.commit()
-                conn.close()
+                query = text("DELETE FROM transactions WHERE id = :target_id")
+                with engine.begin() as conn:
+                    for target_id in deleted_ids:
+                        conn.execute(query, {"target_id": target_id})
 
-                st.success("Database synced successfully!")
+                st.success("Cloud Database synced successfully!")
                 st.rerun()

@@ -2,3 +2,5 @@ streamlit
 pandas
 plotly
 yfinance
+sqlalchemy
+psycopg2-binary
