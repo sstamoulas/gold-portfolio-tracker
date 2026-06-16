@@ -49,8 +49,6 @@ def prepare_purchase_prefill(fetch_market_snapshot_for_date, purchase_date, gram
     else:
         suggested_logged_cost = round(grams * purchase_snapshot.gold_usd_per_gram, 2)
 
-    st.session_state["input_cost_raw"] = suggested_logged_cost
-    st.session_state["input_fx"] = float(purchase_snapshot.usd_try)
     return purchase_snapshot, suggested_logged_cost
 
 
@@ -64,7 +62,7 @@ def render_purchase_snapshot(purchase_snapshot):
     )
 
 
-def render_purchase_form(chosen_currency, suggested_logged_cost, purchase_snapshot, save_callback):
+def render_purchase_form(chosen_currency, purchase_date, grams, suggested_logged_cost, purchase_snapshot, save_callback):
     with st.sidebar.form("purchase_form", clear_on_submit=True):
         if chosen_currency == "TRY":
             label_text = "Logged Cost (in Turkish Lira - TRY)"
@@ -73,21 +71,19 @@ def render_purchase_form(chosen_currency, suggested_logged_cost, purchase_snapsh
             label_text = "Logged Cost (in US Dollars - USD)"
             step_val = 50.0
 
-        st.number_input(
+        current_cost_raw = st.number_input(
             label_text,
             min_value=0.01,
             value=suggested_logged_cost,
             step=step_val,
-            key="input_cost_raw",
         )
 
-        st.number_input(
+        current_fx_rate = st.number_input(
             "Purchase USD/TRY rate (auto-filled from purchase date):",
             min_value=1.0,
             value=float(purchase_snapshot.usd_try),
             step=0.01,
             format="%.4f",
-            key="input_fx",
         )
 
         st.caption(
@@ -95,7 +91,9 @@ def render_purchase_form(chosen_currency, suggested_logged_cost, purchase_snapsh
             "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
             "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
         )
-        st.form_submit_button("➕ Save Permanently to DB", on_click=save_callback)
+        submitted = st.form_submit_button("➕ Save Permanently to DB")
+        if submitted:
+            save_callback(purchase_date, grams, current_cost_raw, current_fx_rate, chosen_currency)
 
 
 def render_purchase_sidebar(fetch_market_snapshot_for_date, save_callback):
@@ -107,6 +105,6 @@ def render_purchase_sidebar(fetch_market_snapshot_for_date, save_callback):
         chosen_currency,
     )
     render_purchase_snapshot(purchase_snapshot)
-    render_purchase_form(chosen_currency, suggested_logged_cost, purchase_snapshot, save_callback)
+    render_purchase_form(chosen_currency, purchase_date, grams, suggested_logged_cost, purchase_snapshot, save_callback)
 
     return sell_spread_pct

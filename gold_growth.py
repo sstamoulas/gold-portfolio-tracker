@@ -11,14 +11,14 @@ from gold_supabase_repo import add_transaction, delete_transaction, get_all_tran
 supabase = init_supabase()
 
 
-def add_callback():
+def add_callback(p_date, g_weight, c_raw, fx_rate, currency):
     add_transaction(
         supabase,
-        st.session_state["input_date"],
-        st.session_state["input_grams"],
-        st.session_state["input_cost_raw"],
-        st.session_state["input_fx"],
-        st.session_state["input_currency"],
+        p_date,
+        g_weight,
+        c_raw,
+        fx_rate,
+        currency,
     )
 
 

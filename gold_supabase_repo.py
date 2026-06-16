@@ -8,18 +8,22 @@ def init_supabase():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 
-def add_transaction(client, p_date, g_weight, c_raw, fx_rate, currency):
+def build_transaction_payload(p_date, g_weight, c_raw, fx_rate, currency):
     if currency == "TRY":
         c_try, c_usd = c_raw, round(c_raw / fx_rate, 2)
     else:
         c_usd, c_try = c_raw, round(c_raw * fx_rate, 2)
 
-    data = {
+    return {
         "purchase_date": str(p_date),
         "grams": float(g_weight),
         "cost_try": float(c_try),
         "cost_usd": float(c_usd),
     }
+
+
+def add_transaction(client, p_date, g_weight, c_raw, fx_rate, currency):
+    data = build_transaction_payload(p_date, g_weight, c_raw, fx_rate, currency)
     response = client.table("transactions").insert(data).execute()
     return response
 
