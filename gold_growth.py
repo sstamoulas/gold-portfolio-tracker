@@ -323,11 +323,12 @@ st.sidebar.header("📝 Log Purchase Records")
 st.sidebar.markdown("Add your transaction details below:")
 
 chosen_currency = st.sidebar.radio(
-    "Purchase Currency Base:",
+    "Purchase entry currency:",
     options=["TRY", "USD"],
     horizontal=True,
     key="input_currency",
 )
+st.sidebar.caption("This only affects the new purchase record you are entering.")
 
 purchase_date = st.sidebar.date_input(
     "Purchase Date",
@@ -351,13 +352,6 @@ sell_spread_pct = st.sidebar.slider(
     value=0.0,
     step=0.1,
     key="sell_spread_pct",
-)
-
-display_currency = st.sidebar.radio(
-    "Ledger display currency",
-    options=["USD", "TRY"],
-    horizontal=True,
-    key="display_currency",
 )
 
 purchase_snapshot = fetch_market_snapshot_for_date(purchase_date)
@@ -477,6 +471,13 @@ else:
     pct_growth = (projected_pl / total_logged_cost) * 100 if total_logged_cost > 0 else 0
 
     st.subheader("📊 Combined Portfolio Performance")
+    display_currency = st.radio(
+        "View currency for chart, summary, and ledger",
+        options=["USD", "TRY"],
+        horizontal=True,
+        key="display_currency",
+    )
+    st.caption("This changes how the results are displayed. It does not change any saved purchase values.")
     kpi1, kpi2, kpi3 = st.columns(3)
     kpi1.metric("Total Weight Owned", f"{total_grams:.2f} grams")
     kpi2.metric(
