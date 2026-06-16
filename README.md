@@ -47,6 +47,7 @@ gold-portfolio-tracker/
 ├── gold_ledger_ui.py       # Ledger column config and tooltip labels
 ├── gold_market_data.py     # Live and historical market snapshot fetchers
 ├── gold_portfolio_math.py  # Portfolio valuation and formatting helpers
+├── gold_portfolio_summary_ui.py # Ledger totals summary renderer
 ├── gold_supabase_repo.py   # Supabase CRUD helpers
 ├── requirements.txt        # Cloud & Local Dependencies
 └── README.md               # Project documentation
@@ -130,9 +131,10 @@ The application logic is now split across small helper modules so the Streamlit 
 
 - `gold_market_data.py` handles live and historical market snapshots.
 - `gold_portfolio_math.py` handles valuation, formatting, and display-currency selection.
+- `gold_portfolio_summary_ui.py` handles the ledger totals summary section.
 - `gold_supabase_repo.py` handles Supabase initialization plus insert, query, and delete operations.
 - `gold_ledger_ui.py` handles the ledger column labels and hover tooltips.
-- `gold_streamlit_ui.py` handles the sidebar, chart, ledger, and summary rendering.
+- `gold_streamlit_ui.py` handles the sidebar, chart, and ledger rendering.
 - `gold_growth.py` stays as the Streamlit entrypoint that wires the pieces together.
 
 ### Floating-Point Fix (`$-0.01` Mismatch Resolved)
