@@ -97,9 +97,10 @@ yfinance
 
 1. Push the project repository to your personal GitHub account (make sure the visibility is set to **Public**).
 2. Head over to [share.streamlit.io](https://share.streamlit.io/) and log in using your linked GitHub account.
-3. Click **"New App"** in the upper right corner.
-4. Point the configuration fields to your repository branch, and set the Main file path to `gold_growth.py`.
-5. Click **"Deploy"**. Your application will be live on a custom `.streamlit.app` URL within 2 minutes.
+3. Head over to [supbase.com](https://supabase.com/dashboard/) and find the database used for the live app.
+4. Click **"New App"** in the upper right corner.
+5. Point the configuration fields to your repository branch, and set the Main file path to `gold_growth.py`.
+6. Click **"Deploy"**. Your application will be live on a custom `.streamlit.app` URL within 2 minutes.
 
 > ⚠️ **Important Architecture Note for Cloud Deployments:** Because this app utilizes a local filesystem SQLite file (`gold_portfolio.db`), data stored on the free Streamlit Community Cloud tier is **ephemeral**. The database file will reset whenever the cloud container goes to sleep or gets rebooted by Streamlit. For permanent storage in a production web environment, transition the backend connection layer from SQLite3 to a cloud-hosted Postgres database (such as Supabase or Neon) using Streamlit Secrets.
 
