@@ -127,7 +127,8 @@ def _build_ledger_display_df(
     selected_pl_col,
     selected_currency_code,
 ):
-    display_df = analysis_df.set_index("id")[
+    row_ids = analysis_df["id"].tolist()
+    display_df = analysis_df[
         [
             "Date",
             "Grams",
@@ -138,6 +139,7 @@ def _build_ledger_display_df(
             selected_pl_col,
         ]
     ].copy()
+    display_df.index = range(len(display_df))
     display_df = display_df.rename(
         columns={
             selected_purchase_price_col: "Buy Px/g",
@@ -154,7 +156,7 @@ def _build_ledger_display_df(
     display_df["Sell Px/g"] = display_df["Sell Px/g"].map(lambda value: format_money(value, selected_currency_code))
     display_df["Sell Value"] = display_df["Sell Value"].map(lambda value: format_money(value, selected_currency_code))
     display_df["P/L"] = display_df["P/L"].map(lambda value: format_money(value, selected_currency_code))
-    return display_df
+    return display_df, row_ids
 
 
 def render_portfolio_ledger(
@@ -174,7 +176,7 @@ def render_portfolio_ledger(
         "Hover the column headers for field details. The logged cost is your exact paid amount; the purchase-date price is reference-only. Sell values include the sell spread."
     )
 
-    display_df = _build_ledger_display_df(
+    display_df, row_ids = _build_ledger_display_df(
         analysis_df,
         selected_purchase_price_col,
         selected_purchase_cost_col,
@@ -202,10 +204,11 @@ def render_portfolio_ledger(
         key="ledger_editor",
     )
 
-    deleted_ids = set(display_df.index.tolist()) - set(edited_df.index.tolist())
-    if deleted_ids:
+    deleted_positions = set(display_df.index.tolist()) - set(edited_df.index.tolist())
+    if deleted_positions:
         delete_errors = []
-        for target_id in deleted_ids:
+        for deleted_position in sorted(deleted_positions):
+            target_id = row_ids[deleted_position]
             try:
                 delete_row_callback(target_id)
             except Exception as exc:
