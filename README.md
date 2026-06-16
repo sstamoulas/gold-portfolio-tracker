@@ -42,9 +42,17 @@ Ensure your project directory contains the following file structure:
 ```text
 gold-portfolio-tracker/
 │
-├── gold_growth.py         # Main Application Script
-├── requirements.txt       # Cloud & Local Dependencies
-└── README.md              # Project documentation
+├── gold_growth.py          # Thin Streamlit entrypoint
+├── gold_purchase_sidebar_ui.py # Purchase sidebar controls and form
+├── gold_streamlit_ui.py    # Market banner, chart, and ledger renderers
+├── gold_ledger_ui.py       # Ledger column config and tooltip labels
+├── gold_market_data.py     # Live and historical market snapshot fetchers
+├── gold_portfolio_math.py  # Portfolio valuation and formatting helpers
+├── gold_portfolio_summary_ui.py # Ledger totals summary renderer
+├── gold_supabase_repo.py   # Supabase CRUD helpers
+├── tests/                  # Unit tests for portfolio math
+├── requirements.txt        # Cloud & Local Dependencies
+└── README.md               # Project documentation
 
 ```
 
@@ -76,7 +84,14 @@ python3 -m pip install -r requirements.txt
 
 ```
 
-### 4. Boot Up the Dashboard
+### 4. Run the Tests
+
+```bash
+python3 -m unittest discover -s tests
+
+```
+
+### 5. Boot Up the Dashboard
 
 ```bash
 python3 -m streamlit run gold_growth.py
@@ -118,6 +133,19 @@ supabase
 ---
 
 ## 🧠 Architectural Notes for Future Reference
+
+### Refactored Module Layout
+
+The application logic is now split across small helper modules so the Streamlit entrypoint stays focused on layout and widget state:
+
+- `gold_market_data.py` handles live and historical market snapshots.
+- `gold_portfolio_math.py` handles valuation, formatting, and display-currency selection.
+- `gold_portfolio_summary_ui.py` handles the ledger totals summary section.
+- `gold_purchase_sidebar_ui.py` handles the purchase entry sidebar and form.
+- `gold_supabase_repo.py` handles Supabase initialization plus insert, query, and delete operations.
+- `gold_ledger_ui.py` handles the ledger column labels and hover tooltips.
+- `gold_streamlit_ui.py` handles the market banner, chart, and ledger rendering.
+- `gold_growth.py` stays as the Streamlit entrypoint that wires the pieces together.
 
 ### Floating-Point Fix (`$-0.01` Mismatch Resolved)
 
