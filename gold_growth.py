@@ -1,312 +1,27 @@
 import datetime
-from dataclasses import dataclass
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
-import requests
-from supabase import create_client
 
-# 1. Page Config
 st.set_page_config(page_title="Multi-Asset Gold Portfolio Tracker", page_icon="🪙", layout="wide")
 
-# 2. Supabase Initialization
-@st.cache_resource
-def init_supabase():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+from gold_ledger_ui import build_ledger_column_config
+from gold_market_data import fetch_live_market_data, fetch_market_snapshot_for_date
+from gold_portfolio_math import build_portfolio_analysis, format_money, get_display_currency_config
+from gold_supabase_repo import add_transaction, delete_transaction, get_all_transactions, init_supabase
 
 supabase = init_supabase()
-GRAMS_PER_ONCE = 31.1034768
 
 
-@dataclass(frozen=True)
-class MarketSnapshot:
-    gold_usd_per_gram: float
-    gold_try_per_gram: float
-    usd_try: float
-    gold_source_date: datetime.date
-    fx_source_date: datetime.date
-    is_fallback: bool = False
-
-
-def build_yfinance_session():
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-        }
-    )
-    return session
-
-
-def _close_on_or_before(ticker_symbol, target_date, lookback_days=14):
-    target_date = pd.Timestamp(target_date).date()
-    session = build_yfinance_session()
-    ticker = yf.Ticker(ticker_symbol, session=session)
-    start = pd.Timestamp(target_date) - pd.Timedelta(days=lookback_days)
-    end = pd.Timestamp(target_date) + pd.Timedelta(days=2)
-
-    history = ticker.history(
-        start=start.to_pydatetime(),
-        end=end.to_pydatetime(),
-        interval="1d",
-        auto_adjust=False,
-    )
-
-    if history.empty or "Close" not in history.columns:
-        raise ValueError(f"No market data returned for {ticker_symbol}")
-
-    history = history.dropna(subset=["Close"])
-    history = history.loc[history.index.date <= target_date]
-
-    if history.empty:
-        expanded_start = pd.Timestamp(target_date) - pd.Timedelta(days=lookback_days * 2)
-        history = ticker.history(
-            start=expanded_start.to_pydatetime(),
-            end=end.to_pydatetime(),
-            interval="1d",
-            auto_adjust=False,
-        )
-        if history.empty or "Close" not in history.columns:
-            raise ValueError(f"No market data returned for {ticker_symbol}")
-        history = history.dropna(subset=["Close"])
-        history = history.loc[history.index.date <= target_date]
-
-    if history.empty:
-        raise ValueError(f"No market data available on or before {target_date} for {ticker_symbol}")
-
-    row = history.iloc[-1]
-    source_date = history.index[-1].date()
-    return float(row["Close"]), source_date
-
-
-@st.cache_data(ttl=300)
-def fetch_live_market_data():
-    try:
-        gold_close, gold_source_date = _close_on_or_before("GC=F", datetime.date.today())
-        usd_try, fx_source_date = _close_on_or_before("USDTRY=X", datetime.date.today())
-        gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
-        gold_price_per_gram_try = gold_price_per_gram_usd * usd_try
-        return MarketSnapshot(
-            gold_price_per_gram_usd,
-            gold_price_per_gram_try,
-            usd_try,
-            gold_source_date,
-            fx_source_date,
-            False,
-        )
-    except Exception:
-        fallback_gold_usd = 75.25  # Rough baseline price per gram (~$2340/oz)
-        fallback_usd_try = 32.50
-        fallback_gold_try = fallback_gold_usd * fallback_usd_try
-        today = datetime.date.today()
-        return MarketSnapshot(
-            fallback_gold_usd,
-            fallback_gold_try,
-            fallback_usd_try,
-            today,
-            today,
-            True,
-        )
-
-
-@st.cache_data(ttl=86400)
-def fetch_market_snapshot_for_date(target_date):
-    target_date = pd.Timestamp(target_date).date()
-    try:
-        gold_close, gold_source_date = _close_on_or_before("GC=F", target_date)
-        usd_try, fx_source_date = _close_on_or_before("USDTRY=X", target_date)
-        gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
-        gold_price_per_gram_try = gold_price_per_gram_usd * usd_try
-        return MarketSnapshot(
-            gold_price_per_gram_usd,
-            gold_price_per_gram_try,
-            usd_try,
-            gold_source_date,
-            fx_source_date,
-            False,
-        )
-    except Exception:
-        live_snapshot = fetch_live_market_data()
-        return MarketSnapshot(
-            live_snapshot.gold_usd_per_gram,
-            live_snapshot.gold_try_per_gram,
-            live_snapshot.usd_try,
-            target_date,
-            target_date,
-            True,
-        )
-
-
-def build_portfolio_analysis(df_portfolio, sell_spread_pct, live_snapshot):
-    if df_portfolio.empty:
-        return df_portfolio, {}
-
-    analysis_df = df_portfolio.copy()
-    analysis_df["Date"] = pd.to_datetime(analysis_df["Date"], errors="coerce").dt.date
-    analysis_df["Grams"] = pd.to_numeric(analysis_df["Grams"], errors="coerce")
-    analysis_df["Cost (TRY)"] = pd.to_numeric(analysis_df["Cost (TRY)"], errors="coerce")
-    analysis_df["Cost (USD)"] = pd.to_numeric(analysis_df["Cost (USD)"], errors="coerce")
-
-    unique_dates = sorted({d for d in analysis_df["Date"].dropna().tolist() if isinstance(d, datetime.date)})
-    purchase_snapshots = {target_date: fetch_market_snapshot_for_date(target_date) for target_date in unique_dates}
-    fallback_used = live_snapshot.is_fallback or any(snapshot.is_fallback for snapshot in purchase_snapshots.values())
-
-    def snapshot_for_date(target_date):
-        snapshot = purchase_snapshots.get(target_date)
-        if snapshot is None:
-            return live_snapshot
-        return snapshot
-
-    analysis_df["Purchase Price / Gram (USD)"] = analysis_df["Date"].apply(
-        lambda target_date: snapshot_for_date(target_date).gold_usd_per_gram
-    )
-    analysis_df["Purchase Price / Gram (TRY)"] = analysis_df["Date"].apply(
-        lambda target_date: snapshot_for_date(target_date).gold_try_per_gram
-    )
-    analysis_df["Purchase USD/TRY"] = analysis_df["Date"].apply(
-        lambda target_date: snapshot_for_date(target_date).usd_try
-    )
-
-    sell_multiplier = 1 - (sell_spread_pct / 100)
-
-    analysis_df["Sell Today Price / Gram (USD)"] = round(
-        live_snapshot.gold_usd_per_gram * sell_multiplier,
-        4,
-    )
-    analysis_df["Sell Today Price / Gram (TRY)"] = round(
-        live_snapshot.gold_try_per_gram * sell_multiplier,
-        4,
-    )
-    analysis_df["Sell Today Value (USD)"] = round(
-        analysis_df["Grams"] * analysis_df["Sell Today Price / Gram (USD)"],
-        2,
-    )
-    analysis_df["Sell Today Value (TRY)"] = round(
-        analysis_df["Grams"] * analysis_df["Sell Today Price / Gram (TRY)"],
-        2,
-    )
-    analysis_df["Projected P/L (USD)"] = round(
-        analysis_df["Sell Today Value (USD)"] - analysis_df["Cost (USD)"],
-        2,
-    )
-    analysis_df["Projected P/L (TRY)"] = round(
-        analysis_df["Sell Today Value (TRY)"] - analysis_df["Cost (TRY)"],
-        2,
-    )
-
-    return analysis_df, fallback_used
-
-
-def get_display_currency_config(display_currency):
-    if display_currency == "USD":
-        return {
-            "code": "USD",
-            "purchase_price_col": "Purchase Price / Gram (USD)",
-            "purchase_cost_col": "Cost (USD)",
-            "sell_price_col": "Sell Today Price / Gram (USD)",
-            "sell_value_col": "Sell Today Value (USD)",
-            "pl_col": "Projected P/L (USD)",
-        }
-
-    return {
-        "code": "TRY",
-        "purchase_price_col": "Purchase Price / Gram (TRY)",
-        "purchase_cost_col": "Cost (TRY)",
-        "sell_price_col": "Sell Today Price / Gram (TRY)",
-        "sell_value_col": "Sell Today Value (TRY)",
-        "pl_col": "Projected P/L (TRY)",
-    }
-
-
-def format_money(value, currency_code):
-    if pd.isna(value):
-        return ""
-
-    if currency_code == "USD":
-        return f"${value:,.2f}"
-
-    return f"{value:,.2f} TL"
-
-
-def build_ledger_column_config(currency_code):
-    return {
-        "Date": st.column_config.Column(
-            "Date",
-            help="Purchase date used to look up the historical market close.",
-            width="small",
-        ),
-        "Grams": st.column_config.Column(
-            "g",
-            help="Amount of gold in the transaction.",
-            width="small",
-        ),
-        "Buy Px/g": st.column_config.Column(
-            "Buy Px/g",
-            help=f"Reference market price per gram on the purchase date. This is informational and not your actual paid amount. Displayed in {currency_code}.",
-            width="small",
-        ),
-        "Logged Cost": st.column_config.Column(
-            "Logged Cost",
-            help=f"The amount you actually paid and logged for this transaction. Displayed in {currency_code}.",
-            width="small",
-        ),
-        "Sell Px/g": st.column_config.Column(
-            "Sell Px/g",
-            help=f"Current sell price per gram after the sell spread. Displayed in {currency_code}.",
-            width="small",
-        ),
-        "Sell Value": st.column_config.Column(
-            "Sell Value",
-            help=f"Expected cash value if you sold today after the sell spread. Displayed in {currency_code}.",
-            width="small",
-        ),
-        "P/L": st.column_config.Column(
-            "P/L",
-            help=f"Sell Value minus Logged Cost for the selected currency. Displayed in {currency_code}.",
-            width="small",
-        ),
-    }
-
-# 3. Data Functions (REST API ONLY)
-def add_transaction(p_date, g_weight, c_raw, fx_rate, currency):
-    if currency == "TRY":
-        c_try, c_usd = c_raw, round(c_raw / fx_rate, 2)
-    else:
-        c_usd, c_try = c_raw, round(c_raw * fx_rate, 2)
-    
-    data = {
-        "purchase_date": str(p_date),
-        "grams": float(g_weight),
-        "cost_try": float(c_try),
-        "cost_usd": float(c_usd)
-    }
-    response = supabase.table("transactions").insert(data).execute()
-    return response
-
-def get_all_transactions():
-    response = supabase.table("transactions").select("*").order("id").execute()
-    return pd.DataFrame(response.data)
-
-def delete_transaction(target_id):
-    try:
-        response = supabase.table("transactions").delete().eq("id", target_id).execute()
-    except Exception as exc:
-        raise RuntimeError(f"Supabase delete failed for transaction ID {target_id}: {exc}") from exc
-
-    return response
-
-# --- CALLBACKS ---
 def add_callback():
     add_transaction(
+        supabase,
         st.session_state["input_date"],
         st.session_state["input_grams"],
         st.session_state["input_cost_raw"],
         st.session_state["input_fx"],
-        st.session_state["input_currency"]
+        st.session_state["input_currency"],
     )
 
 # Execute data fetch
@@ -406,7 +121,7 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
 # ----------------------------------------------------
 # PROCESS PORTFOLIO DATA ARCHITECTURE
 # ----------------------------------------------------
-df_portfolio = get_all_transactions()
+df_portfolio = get_all_transactions(supabase)
 
 if not df_portfolio.empty:
     df_portfolio["purchase_date"] = pd.to_datetime(df_portfolio["purchase_date"], errors="coerce").dt.date
@@ -584,7 +299,7 @@ else:
         delete_errors = []
         for target_id in deleted_ids:
             try:
-                delete_transaction(target_id)
+                delete_transaction(supabase, target_id)
             except Exception as exc:
                 delete_errors.append(str(exc))
 

@@ -42,7 +42,11 @@ Ensure your project directory contains the following file structure:
 ```text
 gold-portfolio-tracker/
 │
-├── gold_growth.py         # Main Application Script
+├── gold_growth.py         # Streamlit entrypoint and page layout
+├── gold_ledger_ui.py      # Ledger column config and tooltip labels
+├── gold_market_data.py    # Live and historical market snapshot fetchers
+├── gold_portfolio_math.py # Portfolio valuation and formatting helpers
+├── gold_supabase_repo.py  # Supabase CRUD helpers
 ├── requirements.txt       # Cloud & Local Dependencies
 └── README.md              # Project documentation
 
@@ -118,6 +122,16 @@ supabase
 ---
 
 ## 🧠 Architectural Notes for Future Reference
+
+### Refactored Module Layout
+
+The application logic is now split across small helper modules so the Streamlit entrypoint stays focused on layout and widget state:
+
+- `gold_market_data.py` handles live and historical market snapshots.
+- `gold_portfolio_math.py` handles valuation, formatting, and display-currency selection.
+- `gold_supabase_repo.py` handles Supabase initialization plus insert, query, and delete operations.
+- `gold_ledger_ui.py` handles the ledger column labels and hover tooltips.
+- `gold_growth.py` stays as the Streamlit page that wires the pieces together.
 
 ### Floating-Point Fix (`$-0.01` Mismatch Resolved)
 
