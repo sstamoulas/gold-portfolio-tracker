@@ -345,7 +345,7 @@ grams = st.sidebar.number_input(
 )
 
 buy_spread_pct = st.sidebar.slider(
-    "Buy spread hint (%)",
+    "Purchase spread (entry only) (%)",
     min_value=0.0,
     max_value=20.0,
     value=0.0,
@@ -413,8 +413,9 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
     )
 
     st.caption(
-        "The prefilled logged cost uses the selected purchase date, the buy-spread hint, and the purchase-day USD/TRY rate. "
-        "You can override it with the exact amount you paid before saving. Gain/loss uses the saved cost basis."
+        "The prefilled logged cost uses the selected purchase date, the purchase spread, and the purchase-day USD/TRY rate. "
+        "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
+        "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
     )
     st.form_submit_button("➕ Save Permanently to DB", on_click=add_callback)
 
@@ -457,7 +458,7 @@ m_col3.metric(
 )
 st.caption(
     f"Current snapshot uses market close from {live_snapshot.gold_source_date} for gold and {live_snapshot.fx_source_date} for FX. "
-    f"Buy hint: {buy_spread_pct:.1f}% | Sell spread: {sell_spread_pct:.1f}%"
+    f"Purchase spread (entry only): {buy_spread_pct:.1f}% | Sell spread: {sell_spread_pct:.1f}%"
 )
 
 st.markdown("---")

@@ -10,7 +10,7 @@ A lightweight, real-time web application built with **Streamlit**, **Python**, a
 
 * **Historical Purchase Snapshots:** Fetches the closest available market close for the selected purchase date and shows the gold price per gram plus USD/TRY at that point in time.
 * **Sell-Today Simulation:** Compares the purchase snapshot against the latest available market close and calculates the value you would receive if you sold today.
-* **Configurable Spreads:** Uses a buy-spread hint to prefill the entry form and a sell spread to model the sale side of the trade.
+* **Configurable Spreads:** Uses a purchase-spread hint to prefill only the current entry form row and a sell spread to model the portfolio-wide sale side of the trade.
 * **Flexible Currency Logging:** Gives you the choice to log your transaction records natively in either USD or TRY base currencies.
 * **Compact Ledger Toggle:** Switches the ledger and summary between USD and TRY views so the table stays narrower and easier to scan.
 * **Hover Tooltips:** Shows short explanations on the ledger column headers so each field stays compact but still understandable.
