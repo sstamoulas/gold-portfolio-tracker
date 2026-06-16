@@ -4,7 +4,8 @@ st.set_page_config(page_title="Multi-Asset Gold Portfolio Tracker", page_icon="ð
 
 from gold_market_data import fetch_live_market_data, fetch_market_snapshot_for_date
 from gold_portfolio_math import build_portfolio_analysis
-from gold_streamlit_ui import render_market_snapshot_banner, render_portfolio_dashboard, render_purchase_sidebar
+from gold_purchase_sidebar_ui import render_purchase_sidebar
+from gold_streamlit_ui import render_market_snapshot_banner, render_portfolio_dashboard
 from gold_supabase_repo import add_transaction, delete_transaction, get_all_transactions, init_supabase
 
 supabase = init_supabase()

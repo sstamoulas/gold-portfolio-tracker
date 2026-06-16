@@ -43,7 +43,8 @@ Ensure your project directory contains the following file structure:
 gold-portfolio-tracker/
 │
 ├── gold_growth.py          # Thin Streamlit entrypoint
-├── gold_streamlit_ui.py    # Sidebar and dashboard renderers
+├── gold_purchase_sidebar_ui.py # Purchase sidebar controls and form
+├── gold_streamlit_ui.py    # Market banner, chart, and ledger renderers
 ├── gold_ledger_ui.py       # Ledger column config and tooltip labels
 ├── gold_market_data.py     # Live and historical market snapshot fetchers
 ├── gold_portfolio_math.py  # Portfolio valuation and formatting helpers
@@ -132,9 +133,10 @@ The application logic is now split across small helper modules so the Streamlit 
 - `gold_market_data.py` handles live and historical market snapshots.
 - `gold_portfolio_math.py` handles valuation, formatting, and display-currency selection.
 - `gold_portfolio_summary_ui.py` handles the ledger totals summary section.
+- `gold_purchase_sidebar_ui.py` handles the purchase entry sidebar and form.
 - `gold_supabase_repo.py` handles Supabase initialization plus insert, query, and delete operations.
 - `gold_ledger_ui.py` handles the ledger column labels and hover tooltips.
-- `gold_streamlit_ui.py` handles the sidebar, chart, and ledger rendering.
+- `gold_streamlit_ui.py` handles the market banner, chart, and ledger rendering.
 - `gold_growth.py` stays as the Streamlit entrypoint that wires the pieces together.
 
 ### Floating-Point Fix (`$-0.01` Mismatch Resolved)
