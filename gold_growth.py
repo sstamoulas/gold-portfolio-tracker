@@ -344,15 +344,6 @@ grams = st.sidebar.number_input(
     key="input_grams",
 )
 
-buy_spread_pct = st.sidebar.slider(
-    "Purchase spread (entry only) (%)",
-    min_value=0.0,
-    max_value=20.0,
-    value=0.0,
-    step=0.1,
-    key="buy_spread_pct",
-)
-
 sell_spread_pct = st.sidebar.slider(
     "Sell spread (%)",
     min_value=0.0,
@@ -382,17 +373,11 @@ st.sidebar.caption(
 with st.sidebar.form("purchase_form", clear_on_submit=True):
     if chosen_currency == "TRY":
         label_text = "Logged Cost (in Turkish Lira - TRY)"
-        dynamic_default_cost = round(
-            grams * purchase_snapshot.gold_try_per_gram * (1 + (buy_spread_pct / 100)),
-            2,
-        )
+        dynamic_default_cost = round(grams * purchase_snapshot.gold_try_per_gram, 2)
         step_val = 500.0
     else:
         label_text = "Logged Cost (in US Dollars - USD)"
-        dynamic_default_cost = round(
-            grams * purchase_snapshot.gold_usd_per_gram * (1 + (buy_spread_pct / 100)),
-            2,
-        )
+        dynamic_default_cost = round(grams * purchase_snapshot.gold_usd_per_gram, 2)
         step_val = 50.0
 
     total_paid_raw = st.number_input(
@@ -413,7 +398,7 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
     )
 
     st.caption(
-        "The prefilled logged cost uses the selected purchase date, the purchase spread, and the purchase-day USD/TRY rate. "
+        "The prefilled logged cost uses the selected purchase date and the purchase-day USD/TRY rate. "
         "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
         "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
     )
@@ -458,7 +443,7 @@ m_col3.metric(
 )
 st.caption(
     f"Current snapshot uses market close from {live_snapshot.gold_source_date} for gold and {live_snapshot.fx_source_date} for FX. "
-    f"Purchase spread (entry only): {buy_spread_pct:.1f}% | Sell spread: {sell_spread_pct:.1f}%"
+    f"Sell spread: {sell_spread_pct:.1f}%"
 )
 
 st.markdown("---")
