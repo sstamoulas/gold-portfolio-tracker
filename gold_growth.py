@@ -141,7 +141,7 @@ def fetch_market_snapshot_for_date(target_date):
         )
 
 
-def build_portfolio_analysis(df_portfolio, buy_spread_pct, sell_spread_pct, live_snapshot):
+def build_portfolio_analysis(df_portfolio, sell_spread_pct, live_snapshot):
     if df_portfolio.empty:
         return df_portfolio, {}
 
@@ -171,7 +171,6 @@ def build_portfolio_analysis(df_portfolio, buy_spread_pct, sell_spread_pct, live
         lambda target_date: snapshot_for_date(target_date).usd_try
     )
 
-    buy_multiplier = 1 + (buy_spread_pct / 100)
     sell_multiplier = 1 - (sell_spread_pct / 100)
 
     analysis_df["Sell Today Price / Gram (USD)"] = round(
@@ -190,20 +189,12 @@ def build_portfolio_analysis(df_portfolio, buy_spread_pct, sell_spread_pct, live
         analysis_df["Grams"] * analysis_df["Sell Today Price / Gram (TRY)"],
         2,
     )
-    analysis_df["Purchase Cost (USD)"] = round(
-        analysis_df["Grams"] * analysis_df["Purchase Price / Gram (USD)"] * buy_multiplier,
-        2,
-    )
-    analysis_df["Purchase Cost (TRY)"] = round(
-        analysis_df["Grams"] * analysis_df["Purchase Price / Gram (TRY)"] * buy_multiplier,
-        2,
-    )
     analysis_df["Projected P/L (USD)"] = round(
-        analysis_df["Sell Today Value (USD)"] - analysis_df["Purchase Cost (USD)"],
+        analysis_df["Sell Today Value (USD)"] - analysis_df["Cost (USD)"],
         2,
     )
     analysis_df["Projected P/L (TRY)"] = round(
-        analysis_df["Sell Today Value (TRY)"] - analysis_df["Purchase Cost (TRY)"],
+        analysis_df["Sell Today Value (TRY)"] - analysis_df["Cost (TRY)"],
         2,
     )
 
@@ -215,7 +206,7 @@ def get_display_currency_config(display_currency):
         return {
             "code": "USD",
             "purchase_price_col": "Purchase Price / Gram (USD)",
-            "purchase_cost_col": "Purchase Cost (USD)",
+            "purchase_cost_col": "Cost (USD)",
             "sell_price_col": "Sell Today Price / Gram (USD)",
             "sell_value_col": "Sell Today Value (USD)",
             "pl_col": "Projected P/L (USD)",
@@ -224,7 +215,7 @@ def get_display_currency_config(display_currency):
     return {
         "code": "TRY",
         "purchase_price_col": "Purchase Price / Gram (TRY)",
-        "purchase_cost_col": "Purchase Cost (TRY)",
+        "purchase_cost_col": "Cost (TRY)",
         "sell_price_col": "Sell Today Price / Gram (TRY)",
         "sell_value_col": "Sell Today Value (TRY)",
         "pl_col": "Projected P/L (TRY)",
@@ -255,12 +246,12 @@ def build_ledger_column_config(currency_code):
         ),
         "Buy Px/g": st.column_config.Column(
             "Buy Px/g",
-            help=f"Historical gold price per gram on the purchase date before the buy spread. Displayed in {currency_code}.",
+            help=f"Reference market price per gram on the purchase date. This is informational and not your actual paid amount. Displayed in {currency_code}.",
             width="small",
         ),
-        "Buy Cost": st.column_config.Column(
-            "Buy Cost",
-            help=f"Modeled acquisition cost including the buy spread. Displayed in {currency_code}.",
+        "Logged Cost": st.column_config.Column(
+            "Logged Cost",
+            help=f"The amount you actually paid and logged for this transaction. Displayed in {currency_code}.",
             width="small",
         ),
         "Sell Px/g": st.column_config.Column(
@@ -275,7 +266,7 @@ def build_ledger_column_config(currency_code):
         ),
         "P/L": st.column_config.Column(
             "P/L",
-            help=f"Sell Value minus Buy Cost for the selected currency. Displayed in {currency_code}.",
+            help=f"Sell Value minus Logged Cost for the selected currency. Displayed in {currency_code}.",
             width="small",
         ),
     }
@@ -332,11 +323,12 @@ st.sidebar.header("📝 Log Purchase Records")
 st.sidebar.markdown("Add your transaction details below:")
 
 chosen_currency = st.sidebar.radio(
-    "Purchase Currency Base:",
+    "Purchase entry currency:",
     options=["TRY", "USD"],
     horizontal=True,
     key="input_currency",
 )
+st.sidebar.caption("This only affects the new purchase record you are entering.")
 
 purchase_date = st.sidebar.date_input(
     "Purchase Date",
@@ -353,15 +345,6 @@ grams = st.sidebar.number_input(
     key="input_grams",
 )
 
-buy_spread_pct = st.sidebar.slider(
-    "Buy spread (%)",
-    min_value=0.0,
-    max_value=20.0,
-    value=0.0,
-    step=0.1,
-    key="buy_spread_pct",
-)
-
 sell_spread_pct = st.sidebar.slider(
     "Sell spread (%)",
     min_value=0.0,
@@ -371,13 +354,6 @@ sell_spread_pct = st.sidebar.slider(
     key="sell_spread_pct",
 )
 
-display_currency = st.sidebar.radio(
-    "Ledger display currency",
-    options=["USD", "TRY"],
-    horizontal=True,
-    key="display_currency",
-)
-
 purchase_snapshot = fetch_market_snapshot_for_date(purchase_date)
 
 st.sidebar.markdown("### Purchase Snapshot")
@@ -385,23 +361,17 @@ st.sidebar.metric("Gold / gram (USD)", f"${purchase_snapshot.gold_usd_per_gram:,
 st.sidebar.metric("Gold / gram (TRY)", f"{purchase_snapshot.gold_try_per_gram:,.2f} TL")
 st.sidebar.metric("USD/TRY", f"{purchase_snapshot.usd_try:,.4f}")
 st.sidebar.caption(
-    f"Using market close from {purchase_snapshot.gold_source_date} for gold and {purchase_snapshot.fx_source_date} for FX."
+    f"Reference-only market close from {purchase_snapshot.gold_source_date} for gold and {purchase_snapshot.fx_source_date} for FX."
 )
 
 with st.sidebar.form("purchase_form", clear_on_submit=True):
     if chosen_currency == "TRY":
         label_text = "Logged Cost (in Turkish Lira - TRY)"
-        dynamic_default_cost = round(
-            grams * purchase_snapshot.gold_try_per_gram * (1 + (buy_spread_pct / 100)),
-            2,
-        )
+        dynamic_default_cost = round(grams * purchase_snapshot.gold_try_per_gram, 2)
         step_val = 500.0
     else:
         label_text = "Logged Cost (in US Dollars - USD)"
-        dynamic_default_cost = round(
-            grams * purchase_snapshot.gold_usd_per_gram * (1 + (buy_spread_pct / 100)),
-            2,
-        )
+        dynamic_default_cost = round(grams * purchase_snapshot.gold_usd_per_gram, 2)
         step_val = 50.0
 
     total_paid_raw = st.number_input(
@@ -421,7 +391,11 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
         key="input_fx",
     )
 
-    st.caption("The prefilled logged cost uses the selected purchase date, the buy spread, and the purchase-day USD/TRY rate. You can still override it before saving.")
+    st.caption(
+        "The prefilled logged cost uses the selected purchase date and the purchase-day USD/TRY rate. "
+        "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
+        "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
+    )
     st.form_submit_button("➕ Save Permanently to DB", on_click=add_callback)
 
 # ----------------------------------------------------
@@ -441,7 +415,6 @@ if not df_portfolio.empty:
     )
     analysis_df, historical_fallback_used = build_portfolio_analysis(
         df_portfolio,
-        buy_spread_pct,
         sell_spread_pct,
         live_snapshot,
     )
@@ -464,7 +437,7 @@ m_col3.metric(
 )
 st.caption(
     f"Current snapshot uses market close from {live_snapshot.gold_source_date} for gold and {live_snapshot.fx_source_date} for FX. "
-    f"Buy spread: {buy_spread_pct:.1f}% | Sell spread: {sell_spread_pct:.1f}%"
+    f"Sell spread: {sell_spread_pct:.1f}%"
 )
 
 st.markdown("---")
@@ -482,6 +455,13 @@ if analysis_df.empty:
 else:
     analysis_df["Date"] = analysis_df["Date"].astype(str)
 
+    display_currency = st.radio(
+        "View currency for chart, summary, and ledger",
+        options=["USD", "TRY"],
+        horizontal=True,
+        key="display_currency",
+    )
+    st.caption("This changes how the results are displayed. It does not change any saved purchase values.")
     currency_cfg = get_display_currency_config(display_currency)
     selected_currency_code = currency_cfg["code"]
     selected_purchase_price_col = currency_cfg["purchase_price_col"]
@@ -491,11 +471,11 @@ else:
     selected_pl_col = currency_cfg["pl_col"]
 
     total_grams = analysis_df["Grams"].sum()
-    total_purchase_cost = analysis_df[selected_purchase_cost_col].sum()
+    total_logged_cost = analysis_df[selected_purchase_cost_col].sum()
     total_sell_value = analysis_df[selected_sell_value_col].sum()
-    projected_pl = total_sell_value - total_purchase_cost
+    projected_pl = total_sell_value - total_logged_cost
 
-    pct_growth = (projected_pl / total_purchase_cost) * 100 if total_purchase_cost > 0 else 0
+    pct_growth = (projected_pl / total_logged_cost) * 100 if total_logged_cost > 0 else 0
 
     st.subheader("📊 Combined Portfolio Performance")
     kpi1, kpi2, kpi3 = st.columns(3)
@@ -506,19 +486,19 @@ else:
         delta=f"{format_money(projected_pl, selected_currency_code)} ({pct_growth:+.2f}%)",
     )
     kpi3.metric(
-        f"Projected P/L ({selected_currency_code})",
+        f"Net Gain/Loss ({selected_currency_code})",
         format_money(projected_pl, selected_currency_code),
     )
 
     st.markdown("---")
 
-    st.subheader(f"📈 Purchase Cost vs. Sell Today Value ({selected_currency_code})")
+    st.subheader(f"📈 Logged Cost vs. Sell Today Value ({selected_currency_code})")
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=analysis_df["Date"] + " (" + analysis_df["Grams"].astype(str) + "g)",
             y=analysis_df[selected_purchase_cost_col],
-            name=f"Purchase Cost ({selected_currency_code})",
+            name=f"Logged Cost ({selected_currency_code})",
             marker_color="#636EFA",
         )
     )
@@ -545,7 +525,7 @@ else:
     st.caption(
         "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**. Deletions are saved automatically. "
         f"The ledger is showing {selected_currency_code} columns only to keep it compact. "
-        "Hover the column headers for field details. Purchase prices are based on the closest available market close on or before the selected purchase date, and sell values include the sell spread."
+        "Hover the column headers for field details. The logged cost is your exact paid amount; the purchase-date price is reference-only. Sell values include the sell spread."
     )
 
     display_df = analysis_df.set_index("id")[
@@ -562,7 +542,7 @@ else:
     display_df = display_df.rename(
         columns={
             selected_purchase_price_col: "Buy Px/g",
-            selected_purchase_cost_col: "Buy Cost",
+            selected_purchase_cost_col: "Logged Cost",
             selected_sell_price_col: "Sell Px/g",
             selected_sell_value_col: "Sell Value",
             selected_pl_col: "P/L",
@@ -571,7 +551,7 @@ else:
     display_df["Date"] = display_df["Date"].astype(str)
     display_df["Grams"] = display_df["Grams"].map(lambda value: f"{value:.2f} g")
     display_df["Buy Px/g"] = display_df["Buy Px/g"].map(lambda value: format_money(value, selected_currency_code))
-    display_df["Buy Cost"] = display_df["Buy Cost"].map(lambda value: format_money(value, selected_currency_code))
+    display_df["Logged Cost"] = display_df["Logged Cost"].map(lambda value: format_money(value, selected_currency_code))
     display_df["Sell Px/g"] = display_df["Sell Px/g"].map(lambda value: format_money(value, selected_currency_code))
     display_df["Sell Value"] = display_df["Sell Value"].map(lambda value: format_money(value, selected_currency_code))
     display_df["P/L"] = display_df["P/L"].map(lambda value: format_money(value, selected_currency_code))
@@ -586,7 +566,7 @@ else:
             "Date",
             "Grams",
             "Buy Px/g",
-            "Buy Cost",
+            "Logged Cost",
             "Sell Px/g",
             "Sell Value",
             "P/L",
@@ -614,14 +594,14 @@ else:
     st.markdown("### 🧮 Ledger Totals Summary")
     t_col1, t_col2, t_col3, t_col4, t_col5, t_col6, t_col7 = st.columns(7)
     t_col1.markdown(f"**Total Grams:**\n{total_grams:.2f}g")
-    t_col2.markdown(f"**Purchase Cost ({selected_currency_code}):**\n{format_money(total_purchase_cost, selected_currency_code)}")
+    t_col2.markdown(f"**Logged Cost ({selected_currency_code}):**\n{format_money(total_logged_cost, selected_currency_code)}")
     t_col3.markdown(f"**Sell Today Value ({selected_currency_code}):**\n{format_money(total_sell_value, selected_currency_code)}")
     g_color = "green" if projected_pl >= 0 else "red"
     t_col4.markdown(
-        f"**Projected P/L ({selected_currency_code}):**\n<span style='color:{g_color}; font-weight:bold;'>{format_money(projected_pl, selected_currency_code)}</span>",
+        f"**Net Gain/Loss ({selected_currency_code}):**\n<span style='color:{g_color}; font-weight:bold;'>{format_money(projected_pl, selected_currency_code)}</span>",
         unsafe_allow_html=True,
     )
-    t_col5.markdown(f"**Spread Impact:**\n{buy_spread_pct:.1f}% buy / {sell_spread_pct:.1f}% sell")
+    t_col5.markdown(f"**Sell Spread:**\n{sell_spread_pct:.1f}%")
     t_col6.markdown(
         f"**Sell Snapshot:**\n{live_snapshot.gold_source_date}",
     )
