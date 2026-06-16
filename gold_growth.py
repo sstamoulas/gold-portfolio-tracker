@@ -355,6 +355,13 @@ sell_spread_pct = st.sidebar.slider(
 )
 
 purchase_snapshot = fetch_market_snapshot_for_date(purchase_date)
+if chosen_currency == "TRY":
+    suggested_logged_cost = round(grams * purchase_snapshot.gold_try_per_gram, 2)
+else:
+    suggested_logged_cost = round(grams * purchase_snapshot.gold_usd_per_gram, 2)
+
+st.session_state["input_cost_raw"] = suggested_logged_cost
+st.session_state["input_fx"] = float(purchase_snapshot.usd_try)
 
 st.sidebar.markdown("### Purchase Snapshot")
 st.sidebar.metric("Gold / gram (USD)", f"${purchase_snapshot.gold_usd_per_gram:,.2f}")
@@ -367,17 +374,15 @@ st.sidebar.caption(
 with st.sidebar.form("purchase_form", clear_on_submit=True):
     if chosen_currency == "TRY":
         label_text = "Logged Cost (in Turkish Lira - TRY)"
-        dynamic_default_cost = round(grams * purchase_snapshot.gold_try_per_gram, 2)
         step_val = 500.0
     else:
         label_text = "Logged Cost (in US Dollars - USD)"
-        dynamic_default_cost = round(grams * purchase_snapshot.gold_usd_per_gram, 2)
         step_val = 50.0
 
     total_paid_raw = st.number_input(
         label_text,
         min_value=0.01,
-        value=dynamic_default_cost,
+        value=suggested_logged_cost,
         step=step_val,
         key="input_cost_raw",
     )
@@ -392,7 +397,7 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
     )
 
     st.caption(
-        "The prefilled logged cost uses the selected purchase date and the purchase-day USD/TRY rate. "
+        "The suggested logged cost refreshes when you change purchase date, grams, or entry currency. "
         "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
         "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
     )
