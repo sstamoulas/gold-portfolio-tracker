@@ -50,6 +50,7 @@ gold-portfolio-tracker/
 ├── gold_portfolio_math.py  # Portfolio valuation and formatting helpers
 ├── gold_portfolio_summary_ui.py # Ledger totals summary renderer
 ├── gold_supabase_repo.py   # Supabase CRUD helpers
+├── tests/                  # Unit tests for portfolio math
 ├── requirements.txt        # Cloud & Local Dependencies
 └── README.md               # Project documentation
 
@@ -83,7 +84,14 @@ python3 -m pip install -r requirements.txt
 
 ```
 
-### 4. Boot Up the Dashboard
+### 4. Run the Tests
+
+```bash
+python3 -m unittest discover -s tests
+
+```
+
+### 5. Boot Up the Dashboard
 
 ```bash
 python3 -m streamlit run gold_growth.py
