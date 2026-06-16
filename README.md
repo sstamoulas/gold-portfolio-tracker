@@ -2,7 +2,7 @@
 
 # 🪙 Gold Purchase & Sell-Today Tracker (USD & TRY)
 
-A lightweight, real-time web application built with **Streamlit**, **Python**, and **Supabase** to log and track gold purchases in grams. It looks up the gold price and USD/TRY rate at the purchase date, compares them with the latest available market close, and estimates profit or loss after configurable buy and sell spreads in both **US Dollars (USD)** and **Turkish Lira (TRY)**.
+A lightweight, real-time web application built with **Streamlit**, **Python**, and **Supabase** to log and track gold purchases in grams. It stores the exact amount you paid, looks up the gold price and USD/TRY rate at the purchase date for reference, compares them with the latest available market close, and shows whether you would gain or lose if you sold today after the configured sell spread.
 
 ---
 
@@ -10,7 +10,7 @@ A lightweight, real-time web application built with **Streamlit**, **Python**, a
 
 * **Historical Purchase Snapshots:** Fetches the closest available market close for the selected purchase date and shows the gold price per gram plus USD/TRY at that point in time.
 * **Sell-Today Simulation:** Compares the purchase snapshot against the latest available market close and calculates the value you would receive if you sold today.
-* **Configurable Spreads:** Lets you model both buy spread and sell spread so the projected gain or loss reflects realistic trading friction.
+* **Configurable Spreads:** Uses a buy-spread hint to prefill the entry form and a sell spread to model the sale side of the trade.
 * **Flexible Currency Logging:** Gives you the choice to log your transaction records natively in either USD or TRY base currencies.
 * **Compact Ledger Toggle:** Switches the ledger and summary between USD and TRY views so the table stays narrower and easier to scan.
 * **Hover Tooltips:** Shows short explanations on the ledger column headers so each field stays compact but still understandable.
