@@ -5,15 +5,31 @@ import pandas as pd
 from gold_market_data import fetch_market_snapshot_for_date
 
 
-def build_portfolio_analysis(df_portfolio, sell_spread_pct, live_snapshot):
+def prepare_portfolio_frame(df_portfolio):
     if df_portfolio.empty:
-        return df_portfolio, {}
+        return df_portfolio.copy()
 
     analysis_df = df_portfolio.copy()
+    analysis_df = analysis_df.rename(
+        columns={
+            "purchase_date": "Date",
+            "grams": "Grams",
+            "cost_try": "Cost (TRY)",
+            "cost_usd": "Cost (USD)",
+        }
+    )
     analysis_df["Date"] = pd.to_datetime(analysis_df["Date"], errors="coerce").dt.date
     analysis_df["Grams"] = pd.to_numeric(analysis_df["Grams"], errors="coerce")
     analysis_df["Cost (TRY)"] = pd.to_numeric(analysis_df["Cost (TRY)"], errors="coerce")
     analysis_df["Cost (USD)"] = pd.to_numeric(analysis_df["Cost (USD)"], errors="coerce")
+    return analysis_df
+
+
+def build_portfolio_analysis(df_portfolio, sell_spread_pct, live_snapshot):
+    if df_portfolio.empty:
+        return df_portfolio, {}
+
+    analysis_df = prepare_portfolio_frame(df_portfolio)
 
     unique_dates = sorted({d for d in analysis_df["Date"].dropna().tolist() if isinstance(d, datetime.date)})
     purchase_snapshots = {target_date: fetch_market_snapshot_for_date(target_date) for target_date in unique_dates}
