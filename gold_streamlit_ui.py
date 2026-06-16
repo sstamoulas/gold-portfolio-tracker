@@ -123,22 +123,7 @@ def render_market_snapshot_banner(live_snapshot, sell_spread_pct, historical_fal
         )
 
 
-def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, delete_row_callback):
-    if analysis_df.empty:
-        st.info(
-            "ℹ️ Your portfolio cloud database is currently empty! Fill out the forms on the left sidebar to add transactions."
-        )
-        return
-
-    analysis_df["Date"] = analysis_df["Date"].astype(str)
-
-    display_currency = st.radio(
-        "View currency for chart, summary, and ledger",
-        options=["USD", "TRY"],
-        horizontal=True,
-        key="display_currency",
-    )
-    st.caption("This changes how the results are displayed. It does not change any saved purchase values.")
+def _get_portfolio_display_context(analysis_df, display_currency):
     currency_cfg = get_display_currency_config(display_currency)
     selected_currency_code = currency_cfg["code"]
     selected_purchase_price_col = currency_cfg["purchase_price_col"]
@@ -153,6 +138,33 @@ def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, dele
     projected_pl = total_sell_value - total_logged_cost
     pct_growth = (projected_pl / total_logged_cost) * 100 if total_logged_cost > 0 else 0
 
+    return {
+        "selected_currency_code": selected_currency_code,
+        "selected_purchase_price_col": selected_purchase_price_col,
+        "selected_purchase_cost_col": selected_purchase_cost_col,
+        "selected_sell_price_col": selected_sell_price_col,
+        "selected_sell_value_col": selected_sell_value_col,
+        "selected_pl_col": selected_pl_col,
+        "total_grams": total_grams,
+        "total_logged_cost": total_logged_cost,
+        "total_sell_value": total_sell_value,
+        "projected_pl": projected_pl,
+        "pct_growth": pct_growth,
+    }
+
+
+def render_portfolio_currency_selector():
+    display_currency = st.radio(
+        "View currency for chart, summary, and ledger",
+        options=["USD", "TRY"],
+        horizontal=True,
+        key="display_currency",
+    )
+    st.caption("This changes how the results are displayed. It does not change any saved purchase values.")
+    return display_currency
+
+
+def render_portfolio_kpis(total_grams, total_sell_value, projected_pl, pct_growth, selected_currency_code):
     st.subheader("📊 Combined Portfolio Performance")
     kpi1, kpi2, kpi3 = st.columns(3)
     kpi1.metric("Total Weight Owned", f"{total_grams:.2f} grams")
@@ -166,8 +178,8 @@ def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, dele
         format_money(projected_pl, selected_currency_code),
     )
 
-    st.markdown("---")
 
+def render_portfolio_chart(analysis_df, selected_purchase_cost_col, selected_sell_value_col, selected_currency_code):
     st.subheader(f"📈 Logged Cost vs. Sell Today Value ({selected_currency_code})")
     fig = go.Figure()
     fig.add_trace(
@@ -194,13 +206,16 @@ def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, dele
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("📜 Historical Transaction Ledger")
-    st.caption(
-        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**. Deletions are saved automatically. "
-        f"The ledger is showing {selected_currency_code} columns only to keep it compact. "
-        "Hover the column headers for field details. The logged cost is your exact paid amount; the purchase-date price is reference-only. Sell values include the sell spread."
-    )
 
+def _build_ledger_display_df(
+    analysis_df,
+    selected_purchase_price_col,
+    selected_purchase_cost_col,
+    selected_sell_price_col,
+    selected_sell_value_col,
+    selected_pl_col,
+    selected_currency_code,
+):
     display_df = analysis_df.set_index("id")[
         [
             "Date",
@@ -228,6 +243,35 @@ def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, dele
     display_df["Sell Px/g"] = display_df["Sell Px/g"].map(lambda value: format_money(value, selected_currency_code))
     display_df["Sell Value"] = display_df["Sell Value"].map(lambda value: format_money(value, selected_currency_code))
     display_df["P/L"] = display_df["P/L"].map(lambda value: format_money(value, selected_currency_code))
+    return display_df
+
+
+def render_portfolio_ledger(
+    analysis_df,
+    selected_currency_code,
+    selected_purchase_price_col,
+    selected_purchase_cost_col,
+    selected_sell_price_col,
+    selected_sell_value_col,
+    selected_pl_col,
+    delete_row_callback,
+):
+    st.subheader("📜 Historical Transaction Ledger")
+    st.caption(
+        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**. Deletions are saved automatically. "
+        f"The ledger is showing {selected_currency_code} columns only to keep it compact. "
+        "Hover the column headers for field details. The logged cost is your exact paid amount; the purchase-date price is reference-only. Sell values include the sell spread."
+    )
+
+    display_df = _build_ledger_display_df(
+        analysis_df,
+        selected_purchase_price_col,
+        selected_purchase_cost_col,
+        selected_sell_price_col,
+        selected_sell_value_col,
+        selected_pl_col,
+        selected_currency_code,
+    )
 
     edited_df = st.data_editor(
         display_df,
@@ -264,6 +308,8 @@ def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, dele
 
         st.rerun()
 
+
+def render_portfolio_summary(total_grams, total_logged_cost, total_sell_value, projected_pl, sell_spread_pct, live_snapshot, selected_currency_code):
     st.markdown("### 🧮 Ledger Totals Summary")
     t_col1, t_col2, t_col3, t_col4, t_col5, t_col6, t_col7 = st.columns(7)
     t_col1.markdown(f"**Total Grams:**\n{total_grams:.2f}g")
@@ -280,4 +326,56 @@ def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, dele
     )
     t_col7.markdown(
         f"**View Mode:**\n{selected_currency_code}",
+    )
+
+
+def render_portfolio_dashboard(analysis_df, live_snapshot, sell_spread_pct, delete_row_callback):
+    if analysis_df.empty:
+        st.info(
+            "ℹ️ Your portfolio cloud database is currently empty! Fill out the forms on the left sidebar to add transactions."
+        )
+        return
+
+    analysis_df = analysis_df.copy()
+    analysis_df["Date"] = analysis_df["Date"].astype(str)
+
+    display_currency = render_portfolio_currency_selector()
+    context = _get_portfolio_display_context(analysis_df, display_currency)
+
+    render_portfolio_kpis(
+        context["total_grams"],
+        context["total_sell_value"],
+        context["projected_pl"],
+        context["pct_growth"],
+        context["selected_currency_code"],
+    )
+
+    st.markdown("---")
+
+    render_portfolio_chart(
+        analysis_df,
+        context["selected_purchase_cost_col"],
+        context["selected_sell_value_col"],
+        context["selected_currency_code"],
+    )
+
+    render_portfolio_ledger(
+        analysis_df,
+        context["selected_currency_code"],
+        context["selected_purchase_price_col"],
+        context["selected_purchase_cost_col"],
+        context["selected_sell_price_col"],
+        context["selected_sell_value_col"],
+        context["selected_pl_col"],
+        delete_row_callback,
+    )
+
+    render_portfolio_summary(
+        context["total_grams"],
+        context["total_logged_cost"],
+        context["total_sell_value"],
+        context["projected_pl"],
+        sell_spread_pct,
+        live_snapshot,
+        context["selected_currency_code"],
     )
