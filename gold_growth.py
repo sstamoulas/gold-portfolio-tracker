@@ -1,4 +1,5 @@
 import datetime
+from dataclasses import dataclass
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -16,6 +17,268 @@ def init_supabase():
 
 supabase = init_supabase()
 GRAMS_PER_ONCE = 31.1034768
+
+
+@dataclass(frozen=True)
+class MarketSnapshot:
+    gold_usd_per_gram: float
+    gold_try_per_gram: float
+    usd_try: float
+    gold_source_date: datetime.date
+    fx_source_date: datetime.date
+    is_fallback: bool = False
+
+
+def build_yfinance_session():
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+    )
+    return session
+
+
+def _close_on_or_before(ticker_symbol, target_date, lookback_days=14):
+    target_date = pd.Timestamp(target_date).date()
+    session = build_yfinance_session()
+    ticker = yf.Ticker(ticker_symbol, session=session)
+    start = pd.Timestamp(target_date) - pd.Timedelta(days=lookback_days)
+    end = pd.Timestamp(target_date) + pd.Timedelta(days=2)
+
+    history = ticker.history(
+        start=start.to_pydatetime(),
+        end=end.to_pydatetime(),
+        interval="1d",
+        auto_adjust=False,
+    )
+
+    if history.empty or "Close" not in history.columns:
+        raise ValueError(f"No market data returned for {ticker_symbol}")
+
+    history = history.dropna(subset=["Close"])
+    history = history.loc[history.index.date <= target_date]
+
+    if history.empty:
+        expanded_start = pd.Timestamp(target_date) - pd.Timedelta(days=lookback_days * 2)
+        history = ticker.history(
+            start=expanded_start.to_pydatetime(),
+            end=end.to_pydatetime(),
+            interval="1d",
+            auto_adjust=False,
+        )
+        if history.empty or "Close" not in history.columns:
+            raise ValueError(f"No market data returned for {ticker_symbol}")
+        history = history.dropna(subset=["Close"])
+        history = history.loc[history.index.date <= target_date]
+
+    if history.empty:
+        raise ValueError(f"No market data available on or before {target_date} for {ticker_symbol}")
+
+    row = history.iloc[-1]
+    source_date = history.index[-1].date()
+    return float(row["Close"]), source_date
+
+
+@st.cache_data(ttl=300)
+def fetch_live_market_data():
+    try:
+        gold_close, gold_source_date = _close_on_or_before("GC=F", datetime.date.today())
+        usd_try, fx_source_date = _close_on_or_before("USDTRY=X", datetime.date.today())
+        gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
+        gold_price_per_gram_try = gold_price_per_gram_usd * usd_try
+        return MarketSnapshot(
+            gold_price_per_gram_usd,
+            gold_price_per_gram_try,
+            usd_try,
+            gold_source_date,
+            fx_source_date,
+            False,
+        )
+    except Exception:
+        fallback_gold_usd = 75.25  # Rough baseline price per gram (~$2340/oz)
+        fallback_usd_try = 32.50
+        fallback_gold_try = fallback_gold_usd * fallback_usd_try
+        today = datetime.date.today()
+        return MarketSnapshot(
+            fallback_gold_usd,
+            fallback_gold_try,
+            fallback_usd_try,
+            today,
+            today,
+            True,
+        )
+
+
+@st.cache_data(ttl=86400)
+def fetch_market_snapshot_for_date(target_date):
+    target_date = pd.Timestamp(target_date).date()
+    try:
+        gold_close, gold_source_date = _close_on_or_before("GC=F", target_date)
+        usd_try, fx_source_date = _close_on_or_before("USDTRY=X", target_date)
+        gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
+        gold_price_per_gram_try = gold_price_per_gram_usd * usd_try
+        return MarketSnapshot(
+            gold_price_per_gram_usd,
+            gold_price_per_gram_try,
+            usd_try,
+            gold_source_date,
+            fx_source_date,
+            False,
+        )
+    except Exception:
+        live_snapshot = fetch_live_market_data()
+        return MarketSnapshot(
+            live_snapshot.gold_usd_per_gram,
+            live_snapshot.gold_try_per_gram,
+            live_snapshot.usd_try,
+            target_date,
+            target_date,
+            True,
+        )
+
+
+def build_portfolio_analysis(df_portfolio, buy_spread_pct, sell_spread_pct, live_snapshot):
+    if df_portfolio.empty:
+        return df_portfolio, {}
+
+    analysis_df = df_portfolio.copy()
+    analysis_df["Date"] = pd.to_datetime(analysis_df["Date"], errors="coerce").dt.date
+    analysis_df["Grams"] = pd.to_numeric(analysis_df["Grams"], errors="coerce")
+    analysis_df["Cost (TRY)"] = pd.to_numeric(analysis_df["Cost (TRY)"], errors="coerce")
+    analysis_df["Cost (USD)"] = pd.to_numeric(analysis_df["Cost (USD)"], errors="coerce")
+
+    unique_dates = sorted({d for d in analysis_df["Date"].dropna().tolist() if isinstance(d, datetime.date)})
+    purchase_snapshots = {target_date: fetch_market_snapshot_for_date(target_date) for target_date in unique_dates}
+    fallback_used = live_snapshot.is_fallback or any(snapshot.is_fallback for snapshot in purchase_snapshots.values())
+
+    def snapshot_for_date(target_date):
+        snapshot = purchase_snapshots.get(target_date)
+        if snapshot is None:
+            return live_snapshot
+        return snapshot
+
+    analysis_df["Purchase Price / Gram (USD)"] = analysis_df["Date"].apply(
+        lambda target_date: snapshot_for_date(target_date).gold_usd_per_gram
+    )
+    analysis_df["Purchase Price / Gram (TRY)"] = analysis_df["Date"].apply(
+        lambda target_date: snapshot_for_date(target_date).gold_try_per_gram
+    )
+    analysis_df["Purchase USD/TRY"] = analysis_df["Date"].apply(
+        lambda target_date: snapshot_for_date(target_date).usd_try
+    )
+
+    buy_multiplier = 1 + (buy_spread_pct / 100)
+    sell_multiplier = 1 - (sell_spread_pct / 100)
+
+    analysis_df["Sell Today Price / Gram (USD)"] = round(
+        live_snapshot.gold_usd_per_gram * sell_multiplier,
+        4,
+    )
+    analysis_df["Sell Today Price / Gram (TRY)"] = round(
+        live_snapshot.gold_try_per_gram * sell_multiplier,
+        4,
+    )
+    analysis_df["Sell Today Value (USD)"] = round(
+        analysis_df["Grams"] * analysis_df["Sell Today Price / Gram (USD)"],
+        2,
+    )
+    analysis_df["Sell Today Value (TRY)"] = round(
+        analysis_df["Grams"] * analysis_df["Sell Today Price / Gram (TRY)"],
+        2,
+    )
+    analysis_df["Purchase Cost (USD)"] = round(
+        analysis_df["Grams"] * analysis_df["Purchase Price / Gram (USD)"] * buy_multiplier,
+        2,
+    )
+    analysis_df["Purchase Cost (TRY)"] = round(
+        analysis_df["Grams"] * analysis_df["Purchase Price / Gram (TRY)"] * buy_multiplier,
+        2,
+    )
+    analysis_df["Projected P/L (USD)"] = round(
+        analysis_df["Sell Today Value (USD)"] - analysis_df["Purchase Cost (USD)"],
+        2,
+    )
+    analysis_df["Projected P/L (TRY)"] = round(
+        analysis_df["Sell Today Value (TRY)"] - analysis_df["Purchase Cost (TRY)"],
+        2,
+    )
+
+    return analysis_df, fallback_used
+
+
+def get_display_currency_config(display_currency):
+    if display_currency == "USD":
+        return {
+            "code": "USD",
+            "purchase_price_col": "Purchase Price / Gram (USD)",
+            "purchase_cost_col": "Purchase Cost (USD)",
+            "sell_price_col": "Sell Today Price / Gram (USD)",
+            "sell_value_col": "Sell Today Value (USD)",
+            "pl_col": "Projected P/L (USD)",
+        }
+
+    return {
+        "code": "TRY",
+        "purchase_price_col": "Purchase Price / Gram (TRY)",
+        "purchase_cost_col": "Purchase Cost (TRY)",
+        "sell_price_col": "Sell Today Price / Gram (TRY)",
+        "sell_value_col": "Sell Today Value (TRY)",
+        "pl_col": "Projected P/L (TRY)",
+    }
+
+
+def format_money(value, currency_code):
+    if pd.isna(value):
+        return ""
+
+    if currency_code == "USD":
+        return f"${value:,.2f}"
+
+    return f"{value:,.2f} TL"
+
+
+def build_ledger_column_config(currency_code):
+    return {
+        "Date": st.column_config.Column(
+            "Date",
+            help="Purchase date used to look up the historical market close.",
+            width="small",
+        ),
+        "Grams": st.column_config.Column(
+            "g",
+            help="Amount of gold in the transaction.",
+            width="small",
+        ),
+        "Buy Px/g": st.column_config.Column(
+            "Buy Px/g",
+            help=f"Historical gold price per gram on the purchase date before the buy spread. Displayed in {currency_code}.",
+            width="small",
+        ),
+        "Buy Cost": st.column_config.Column(
+            "Buy Cost",
+            help=f"Modeled acquisition cost including the buy spread. Displayed in {currency_code}.",
+            width="small",
+        ),
+        "Sell Px/g": st.column_config.Column(
+            "Sell Px/g",
+            help=f"Current sell price per gram after the sell spread. Displayed in {currency_code}.",
+            width="small",
+        ),
+        "Sell Value": st.column_config.Column(
+            "Sell Value",
+            help=f"Expected cash value if you sold today after the sell spread. Displayed in {currency_code}.",
+            width="small",
+        ),
+        "P/L": st.column_config.Column(
+            "P/L",
+            help=f"Sell Value minus Buy Cost for the selected currency. Displayed in {currency_code}.",
+            width="small",
+        ),
+    }
 
 # 3. Data Functions (REST API ONLY)
 def add_transaction(p_date, g_weight, c_raw, fx_rate, currency):
@@ -55,42 +318,11 @@ def add_callback():
         st.session_state["input_currency"]
     )
 
-# ----------------------------------------------------
-# FETCH LIVE MARKET DATA (With anti-rate-limiting headers)
-# ----------------------------------------------------
-@st.cache_data(ttl=300)
-def fetch_live_market_data():
-    try:
-        # Create a custom session with custom browser headers to bypass yfinance blocks
-        import requests
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        })
-        
-        tickers = yf.Tickers("GC=F USDTRY=X", session=session)
-        gold_close = tickers.tickers["GC=F"].history(period="1d")["Close"].iloc[-1]
-        try_close = tickers.tickers["USDTRY=X"].history(period="1d")["Close"].iloc[-1]
-
-        gold_price_per_gram_usd = gold_close / GRAMS_PER_ONCE
-        gold_price_per_gram_try = gold_price_per_gram_usd * try_close
-        
-        return gold_price_per_gram_usd, gold_price_per_gram_try, try_close, False
-
-    except Exception as e:
-        # Fallback values if Yahoo Finance continues to block the IP address completely
-        fallback_gold_usd = 75.25  # Rough baseline price per gram (~$2340/oz)
-        fallback_usd_try = 32.50   # Rough baseline conversion rate
-        fallback_gold_try = fallback_gold_usd * fallback_usd_try
-        
-        return fallback_gold_usd, fallback_gold_try, fallback_usd_try, True
-
-
 # Execute data fetch
-live_gold_usd, live_gold_try, live_usd_try, is_fallback = fetch_live_market_data()
+live_snapshot = fetch_live_market_data()
 
 # Warn the user beautifully if we are running on fallback data instead of crashing
-if is_fallback:
+if live_snapshot.is_fallback:
     st.warning("⚠️ Yahoo Finance is temporarily rate-limiting connections. Displaying approximate baseline asset pricing for now.")
 
 # ----------------------------------------------------
@@ -106,25 +338,70 @@ chosen_currency = st.sidebar.radio(
     key="input_currency",
 )
 
+purchase_date = st.sidebar.date_input(
+    "Purchase Date",
+    value=datetime.date.today(),
+    max_value=datetime.date.today(),
+    key="input_date",
+)
+
 grams = st.sidebar.number_input(
-    "Grams Purchased", min_value=0.1, value=10.0, step=1.0, key="input_grams"
+    "Grams Purchased",
+    min_value=0.1,
+    value=10.0,
+    step=1.0,
+    key="input_grams",
+)
+
+buy_spread_pct = st.sidebar.slider(
+    "Buy spread (%)",
+    min_value=0.0,
+    max_value=20.0,
+    value=0.0,
+    step=0.1,
+    key="buy_spread_pct",
+)
+
+sell_spread_pct = st.sidebar.slider(
+    "Sell spread (%)",
+    min_value=0.0,
+    max_value=20.0,
+    value=0.0,
+    step=0.1,
+    key="sell_spread_pct",
+)
+
+display_currency = st.sidebar.radio(
+    "Ledger display currency",
+    options=["USD", "TRY"],
+    horizontal=True,
+    key="display_currency",
+)
+
+purchase_snapshot = fetch_market_snapshot_for_date(purchase_date)
+
+st.sidebar.markdown("### Purchase Snapshot")
+st.sidebar.metric("Gold / gram (USD)", f"${purchase_snapshot.gold_usd_per_gram:,.2f}")
+st.sidebar.metric("Gold / gram (TRY)", f"{purchase_snapshot.gold_try_per_gram:,.2f} TL")
+st.sidebar.metric("USD/TRY", f"{purchase_snapshot.usd_try:,.4f}")
+st.sidebar.caption(
+    f"Using market close from {purchase_snapshot.gold_source_date} for gold and {purchase_snapshot.fx_source_date} for FX."
 )
 
 with st.sidebar.form("purchase_form", clear_on_submit=True):
-    purchase_date = st.date_input(
-        "Purchase Date",
-        value=datetime.date.today(),
-        max_value=datetime.date.today(),
-        key="input_date",
-    )
-
     if chosen_currency == "TRY":
-        label_text = "Total Paid (in Turkish Lira - TRY)"
-        dynamic_default_cost = round(grams * live_gold_try, 2)
+        label_text = "Logged Cost (in Turkish Lira - TRY)"
+        dynamic_default_cost = round(
+            grams * purchase_snapshot.gold_try_per_gram * (1 + (buy_spread_pct / 100)),
+            2,
+        )
         step_val = 500.0
     else:
-        label_text = "Total Paid (in US Dollars - USD)"
-        dynamic_default_cost = round(grams * live_gold_usd, 2)
+        label_text = "Logged Cost (in US Dollars - USD)"
+        dynamic_default_cost = round(
+            grams * purchase_snapshot.gold_usd_per_gram * (1 + (buy_spread_pct / 100)),
+            2,
+        )
         step_val = 50.0
 
     total_paid_raw = st.number_input(
@@ -136,14 +413,15 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
     )
 
     historical_usd_try = st.number_input(
-        "Historical USD/TRY rate at purchase:",
+        "Purchase USD/TRY rate (auto-filled from purchase date):",
         min_value=1.0,
-        value=float(live_usd_try),
+        value=float(purchase_snapshot.usd_try),
         step=0.01,
         format="%.4f",
         key="input_fx",
     )
 
+    st.caption("The prefilled logged cost uses the selected purchase date, the buy spread, and the purchase-day USD/TRY rate. You can still override it before saving.")
     st.form_submit_button("➕ Save Permanently to DB", on_click=add_callback)
 
 # ----------------------------------------------------
@@ -151,21 +429,8 @@ with st.sidebar.form("purchase_form", clear_on_submit=True):
 # ----------------------------------------------------
 df_portfolio = get_all_transactions()
 
-m_col1, m_col2, m_col3 = st.columns(3)
-m_col1.metric("Gold Price / Gram (USD)", f"${live_gold_usd:,.2f}")
-m_col2.metric("Gold Price / Gram (TRY)", f"{live_gold_try:,.2f} TL")
-m_col3.metric("Forex Exchange (USD/TRY)", f"{live_usd_try:,.4f}")
-
-st.markdown("---")
-
-if df_portfolio.empty:
-    st.info(
-        "ℹ️ Your portfolio cloud database is currently empty! Fill out the forms on the left sidebar to add transactions."
-    )
-else:
-    # Ensure standard string conversion for dates fetched from postgresql
-    df_portfolio["purchase_date"] = df_portfolio["purchase_date"].astype(str)
-    
+if not df_portfolio.empty:
+    df_portfolio["purchase_date"] = pd.to_datetime(df_portfolio["purchase_date"], errors="coerce").dt.date
     df_portfolio = df_portfolio.rename(
         columns={
             "purchase_date": "Date",
@@ -174,64 +439,100 @@ else:
             "cost_usd": "Cost (USD)",
         }
     )
-
-    df_portfolio["Current Value (USD)"] = round(df_portfolio["Grams"] * live_gold_usd, 2)
-    df_portfolio["Current Value (TRY)"] = round(df_portfolio["Grams"] * live_gold_try, 2)
-    df_portfolio["Growth (USD)"] = round(
-        df_portfolio["Current Value (USD)"] - df_portfolio["Cost (USD)"], 2
+    analysis_df, historical_fallback_used = build_portfolio_analysis(
+        df_portfolio,
+        buy_spread_pct,
+        sell_spread_pct,
+        live_snapshot,
     )
-    df_portfolio["Growth (TRY)"] = round(
-        df_portfolio["Current Value (TRY)"] - df_portfolio["Cost (TRY)"], 2
+else:
+    analysis_df = df_portfolio
+    historical_fallback_used = False
+
+m_col1, m_col2, m_col3 = st.columns(3)
+m_col1.metric(
+    "Gold Price / Gram (USD)",
+    f"${live_snapshot.gold_usd_per_gram:,.2f}",
+)
+m_col2.metric(
+    "Gold Price / Gram (TRY)",
+    f"{live_snapshot.gold_try_per_gram:,.2f} TL",
+)
+m_col3.metric(
+    "Forex Exchange (USD/TRY)",
+    f"{live_snapshot.usd_try:,.4f}",
+)
+st.caption(
+    f"Current snapshot uses market close from {live_snapshot.gold_source_date} for gold and {live_snapshot.fx_source_date} for FX. "
+    f"Buy spread: {buy_spread_pct:.1f}% | Sell spread: {sell_spread_pct:.1f}%"
+)
+
+st.markdown("---")
+
+if live_snapshot.is_fallback or historical_fallback_used:
+    st.info(
+        "Historical pricing uses the closest available market close on or before each purchase date. "
+        "If Yahoo Finance misses a date, the app falls back to the current market snapshot."
     )
 
-    total_grams = df_portfolio["Grams"].sum()
-    total_cost_usd = df_portfolio["Cost (USD)"].sum()
-    total_cost_try = df_portfolio["Cost (TRY)"].sum()
-    
-    total_val_usd = df_portfolio["Current Value (USD)"].sum()
-    total_val_try = df_portfolio["Current Value (TRY)"].sum()
-    growth_usd = df_portfolio["Growth (USD)"].sum()
-    growth_try = df_portfolio["Growth (TRY)"].sum()
-    
-    pct_growth_usd = (growth_usd / total_cost_usd) * 100 if total_cost_usd > 0 else 0
+if analysis_df.empty:
+    st.info(
+        "ℹ️ Your portfolio cloud database is currently empty! Fill out the forms on the left sidebar to add transactions."
+    )
+else:
+    analysis_df["Date"] = analysis_df["Date"].astype(str)
+
+    currency_cfg = get_display_currency_config(display_currency)
+    selected_currency_code = currency_cfg["code"]
+    selected_purchase_price_col = currency_cfg["purchase_price_col"]
+    selected_purchase_cost_col = currency_cfg["purchase_cost_col"]
+    selected_sell_price_col = currency_cfg["sell_price_col"]
+    selected_sell_value_col = currency_cfg["sell_value_col"]
+    selected_pl_col = currency_cfg["pl_col"]
+
+    total_grams = analysis_df["Grams"].sum()
+    total_purchase_cost = analysis_df[selected_purchase_cost_col].sum()
+    total_sell_value = analysis_df[selected_sell_value_col].sum()
+    projected_pl = total_sell_value - total_purchase_cost
+
+    pct_growth = (projected_pl / total_purchase_cost) * 100 if total_purchase_cost > 0 else 0
 
     st.subheader("📊 Combined Portfolio Performance")
     kpi1, kpi2, kpi3 = st.columns(3)
     kpi1.metric("Total Weight Owned", f"{total_grams:.2f} grams")
     kpi2.metric(
-        "Total Portfolio Value (USD)",
-        f"${total_val_usd:,.2f}",
-        delta=f"${growth_usd:+,.2f} ({pct_growth_usd:+.2f}%)",
+        f"Sell Today Value ({selected_currency_code})",
+        format_money(total_sell_value, selected_currency_code),
+        delta=f"{format_money(projected_pl, selected_currency_code)} ({pct_growth:+.2f}%)",
     )
     kpi3.metric(
-        "Total Portfolio Value (TRY)",
-        f"{total_val_try:,.2f} TL",
-        delta=f"{growth_try:+,.2f} TL",
+        f"Projected P/L ({selected_currency_code})",
+        format_money(projected_pl, selected_currency_code),
     )
 
     st.markdown("---")
 
-    st.subheader("📈 Value Comparison vs. Purchase Cost")
+    st.subheader(f"📈 Purchase Cost vs. Sell Today Value ({selected_currency_code})")
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            x=df_portfolio["Date"] + " (" + df_portfolio["Grams"].astype(str) + "g)",
-            y=df_portfolio["Cost (TRY)"],
-            name="Purchase Cost (TRY)",
+            x=analysis_df["Date"] + " (" + analysis_df["Grams"].astype(str) + "g)",
+            y=analysis_df[selected_purchase_cost_col],
+            name=f"Purchase Cost ({selected_currency_code})",
             marker_color="#636EFA",
         )
     )
     fig.add_trace(
         go.Bar(
-            x=df_portfolio["Date"] + " (" + df_portfolio["Grams"].astype(str) + "g)",
-            y=df_portfolio["Current Value (TRY)"],
-            name="Current Value (TRY)",
+            x=analysis_df["Date"] + " (" + analysis_df["Grams"].astype(str) + "g)",
+            y=analysis_df[selected_sell_value_col],
+            name=f"Sell Today Value ({selected_currency_code})",
             marker_color="#00CC96",
         )
     )
     fig.update_layout(
         barmode="group",
-        yaxis_title="Turkish Lira (TL)",
+        yaxis_title="US Dollars (USD)" if selected_currency_code == "USD" else "Turkish Lira (TL)",
         template="plotly_dark",
         height=350,
     )
@@ -242,30 +543,58 @@ else:
     # ----------------------------------------------------
     st.subheader("📜 Historical Transaction Ledger")
     st.caption(
-        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**. Deletions are saved automatically."
+        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**. Deletions are saved automatically. "
+        f"The ledger is showing {selected_currency_code} columns only to keep it compact. "
+        "Hover the column headers for field details. Purchase prices are based on the closest available market close on or before the selected purchase date, and sell values include the sell spread."
     )
 
-    display_df = df_portfolio.copy()
-    display_df["Cost (USD)"] = display_df["Cost (USD)"].map("${:,.2f}".format)
-    display_df["Current Value (USD)"] = display_df["Current Value (USD)"].map("${:,.2f}".format)
-    display_df["Growth (USD)"] = display_df["Growth (USD)"].map("${:+,.2f}".format)
-    display_df["Cost (TRY)"] = display_df["Cost (TRY)"].map("{:,.2f} TL".format)
-    display_df["Current Value (TRY)"] = display_df["Current Value (TRY)"].map("{:,.2f} TL".format)
-    display_df["Growth (TRY)"] = display_df["Growth (TRY)"].map("{:+,.2f} TL".format)
+    display_df = analysis_df.set_index("id")[
+        [
+            "Date",
+            "Grams",
+            selected_purchase_price_col,
+            selected_purchase_cost_col,
+            selected_sell_price_col,
+            selected_sell_value_col,
+            selected_pl_col,
+        ]
+    ].copy()
+    display_df = display_df.rename(
+        columns={
+            selected_purchase_price_col: "Buy Px/g",
+            selected_purchase_cost_col: "Buy Cost",
+            selected_sell_price_col: "Sell Px/g",
+            selected_sell_value_col: "Sell Value",
+            selected_pl_col: "P/L",
+        }
+    )
+    display_df["Date"] = display_df["Date"].astype(str)
+    display_df["Grams"] = display_df["Grams"].map(lambda value: f"{value:.2f} g")
+    display_df["Buy Px/g"] = display_df["Buy Px/g"].map(lambda value: format_money(value, selected_currency_code))
+    display_df["Buy Cost"] = display_df["Buy Cost"].map(lambda value: format_money(value, selected_currency_code))
+    display_df["Sell Px/g"] = display_df["Sell Px/g"].map(lambda value: format_money(value, selected_currency_code))
+    display_df["Sell Value"] = display_df["Sell Value"].map(lambda value: format_money(value, selected_currency_code))
+    display_df["P/L"] = display_df["P/L"].map(lambda value: format_money(value, selected_currency_code))
 
     edited_df = st.data_editor(
         display_df,
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
+        column_config=build_ledger_column_config(selected_currency_code),
         disabled=[
-            "id", "Date", "Grams", "Cost (TRY)", "Cost (USD)",
-            "Current Value (USD)", "Current Value (TRY)", "Growth (USD)", "Growth (TRY)"
+            "Date",
+            "Grams",
+            "Buy Px/g",
+            "Buy Cost",
+            "Sell Px/g",
+            "Sell Value",
+            "P/L",
         ],
         key="ledger_editor",
     )
 
-    deleted_ids = set(display_df["id"].tolist()) - set(edited_df["id"].tolist())
+    deleted_ids = set(display_df.index.tolist()) - set(edited_df.index.tolist())
     if deleted_ids:
         delete_errors = []
         for target_id in deleted_ids:
@@ -285,12 +614,17 @@ else:
     st.markdown("### 🧮 Ledger Totals Summary")
     t_col1, t_col2, t_col3, t_col4, t_col5, t_col6, t_col7 = st.columns(7)
     t_col1.markdown(f"**Total Grams:**\n{total_grams:.2f}g")
-    t_col2.markdown(f"**Total Cost (TRY):**\n{total_cost_try:,.2f} TL")
-    t_col3.markdown(f"**Total Cost (USD):**\n${total_cost_usd:,.2f}")
-    t_col4.markdown(f"**Current Value (USD):**\n${total_val_usd:,.2f}")
-    t_col5.markdown(f"**Current Value (TRY):**\n{total_val_try:,.2f} TL")
-    
-    g_usd_color = "green" if growth_usd >= 0 else "red"
-    g_try_color = "green" if growth_try >= 0 else "red"
-    t_col6.markdown(f"**Total Growth (USD):**\n<span style='color:{g_usd_color}; font-weight:bold;'>${growth_usd:+,.2f}</span>", unsafe_allow_html=True)
-    t_col7.markdown(f"**Total Growth (TRY):**\n<span style='color:{g_try_color}; font-weight:bold;'>{growth_try:+,.2f} TL</span>", unsafe_allow_html=True)
+    t_col2.markdown(f"**Purchase Cost ({selected_currency_code}):**\n{format_money(total_purchase_cost, selected_currency_code)}")
+    t_col3.markdown(f"**Sell Today Value ({selected_currency_code}):**\n{format_money(total_sell_value, selected_currency_code)}")
+    g_color = "green" if projected_pl >= 0 else "red"
+    t_col4.markdown(
+        f"**Projected P/L ({selected_currency_code}):**\n<span style='color:{g_color}; font-weight:bold;'>{format_money(projected_pl, selected_currency_code)}</span>",
+        unsafe_allow_html=True,
+    )
+    t_col5.markdown(f"**Spread Impact:**\n{buy_spread_pct:.1f}% buy / {sell_spread_pct:.1f}% sell")
+    t_col6.markdown(
+        f"**Sell Snapshot:**\n{live_snapshot.gold_source_date}",
+    )
+    t_col7.markdown(
+        f"**View Mode:**\n{selected_currency_code}",
+    )

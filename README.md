@@ -1,19 +1,21 @@
 ---
 
-# 🪙 Multi-Asset Gold Portfolio Tracker (USD & TRY)
+# 🪙 Gold Purchase & Sell-Today Tracker (USD & TRY)
 
-A lightweight, real-time web application built with **Streamlit**, **Python**, and **SQLite** to log and track historical gold purchases in grams. It provides an instantaneous, comprehensive view of your portfolio value, cost basis, and net growth across both **US Dollars (USD)** and **Turkish Lira (TRY)** using live market feeds.
+A lightweight, real-time web application built with **Streamlit**, **Python**, and **Supabase** to log and track gold purchases in grams. It looks up the gold price and USD/TRY rate at the purchase date, compares them with the latest available market close, and estimates profit or loss after configurable buy and sell spreads in both **US Dollars (USD)** and **Turkish Lira (TRY)**.
 
 ---
 
 ## 🚀 Key Features
 
-* **Live Market Feeds:** Automatically fetches real-time spot gold prices (per gram) and USD/TRY forex rates directly from Yahoo Finance (`yfinance`).
+* **Historical Purchase Snapshots:** Fetches the closest available market close for the selected purchase date and shows the gold price per gram plus USD/TRY at that point in time.
+* **Sell-Today Simulation:** Compares the purchase snapshot against the latest available market close and calculates the value you would receive if you sold today.
+* **Configurable Spreads:** Lets you model both buy spread and sell spread so the projected gain or loss reflects realistic trading friction.
 * **Flexible Currency Logging:** Gives you the choice to log your transaction records natively in either USD or TRY base currencies.
-* **Dynamic Cost Auto-Calculation:** When logging new purchases, the sidebar form dynamically scales the total cost using live market rates. This ensures that a purchase logged at current prices accurately reflects a flat starting growth of exactly `$0.00` / `0.00 TL`.
-* **Synchronized Accounting Layer:** Features built-in floating-point mitigation that forces the ledger summary modules to sum screen-rounded figures, successfully preventing common `$0.01` fractional cent mismatches.
+* **Compact Ledger Toggle:** Switches the ledger and summary between USD and TRY views so the table stays narrower and easier to scan.
+* **Hover Tooltips:** Shows short explanations on the ledger column headers so each field stays compact but still understandable.
 * **Interactive Transaction Ledger:** Displays all historical entries via `st.data_editor` supporting interactive checkbox row selection for clean, bulk database deletions.
-* **Local Persistent Database:** Integrates a local SQLite architecture (`gold_portfolio.db`) so your transaction entry records safely survive script restarts.
+* **Persistent Cloud Storage:** Integrates with Supabase so your transaction entry records survive script restarts.
 
 ---
 
@@ -21,10 +23,11 @@ A lightweight, real-time web application built with **Streamlit**, **Python**, a
 
 * **Language:** Python 3.8+
 * **Framework:** Streamlit (UI & App Engine)
-* **Data & Math:** Pandas, NumPy
+* **Data & Math:** Pandas
 * **Visualization:** Plotly Graph Objects
-* **Database:** SQLite3 (Python Standard Library)
+* **Database:** Supabase/Postgres
 * **Financial API:** yfinance
+* **HTTP Client:** requests
 
 ---
 
@@ -41,8 +44,15 @@ gold-portfolio-tracker/
 │
 ├── gold_growth.py         # Main Application Script
 ├── requirements.txt       # Cloud & Local Dependencies
-└── gold_portfolio.db      # SQLite Database File (auto-generated on first run)
+└── README.md              # Project documentation
 
+```
+
+You also need a Supabase project with a `transactions` table and the following Streamlit secrets:
+
+```toml
+SUPABASE_URL = "https://..."
+SUPABASE_KEY = "..."
 ```
 
 ### 2. Set Up a Virtual Environment (Recommended)
@@ -89,6 +99,8 @@ streamlit
 pandas
 plotly
 yfinance
+requests
+supabase
 
 ```
 
@@ -96,12 +108,12 @@ yfinance
 
 1. Push the project repository to your personal GitHub account (make sure the visibility is set to **Public**).
 2. Head over to [share.streamlit.io](https://share.streamlit.io/) and log in using your linked GitHub account.
-3. Head over to [supbase.com](https://supabase.com/dashboard/) and find the database used for the live app.
+3. Head over to [supabase.com](https://supabase.com/dashboard/) and find the database used for the live app.
 4. Click **"New App"** in the upper right corner.
 5. Point the configuration fields to your repository branch, and set the Main file path to `gold_growth.py`.
 6. Click **"Deploy"**. Your application will be live on a custom `.streamlit.app` URL within 2 minutes.
 
-> ⚠️ **Important Architecture Note for Cloud Deployments:** Because this app utilizes a local filesystem SQLite file (`gold_portfolio.db`), data stored on the free Streamlit Community Cloud tier is **ephemeral**. The database file will reset whenever the cloud container goes to sleep or gets rebooted by Streamlit. For permanent storage in a production web environment, transition the backend connection layer from SQLite3 to a cloud-hosted Postgres database (such as Supabase or Neon) using Streamlit Secrets.
+> ⚠️ **Important Architecture Note for Cloud Deployments:** This app now expects a Supabase-backed `transactions` table. Streamlit Community Cloud itself is still stateless, so Supabase is the persistence layer that keeps your data between deploys and restarts.
 
 ---
 
@@ -114,8 +126,11 @@ When base assets are stored as raw floating numbers and converted via multi-deci
 The application forces absolute synchronization by running an explicit `round(..., 2)` sequence during the data processing phase:
 
 ```python
-df_portfolio["Current Value (USD)"] = round(df_portfolio["Grams"] * live_gold_usd, 2)
-# The summary row then adds up these display figures natively to maintain 100% visual and logical parity
-total_val_usd = df_portfolio["Current Value (USD)"].sum()
+analysis_df["Sell Today Value (USD)"] = round(
+    analysis_df["Grams"] * analysis_df["Sell Today Price / Gram (USD)"],
+    2,
+)
+# The summary row then adds up these display figures natively to maintain visual and logical parity
+total_sell_usd = analysis_df["Sell Today Value (USD)"].sum()
 
 ```
