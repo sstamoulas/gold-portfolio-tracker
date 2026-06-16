@@ -62,15 +62,14 @@ source venv/bin/activate
 ### 3. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 ```
 
 ### 4. Boot Up the Dashboard
 
 ```bash
-streamlit run gold_growth.py
-
+python3 -m streamlit run gold_growth.py
 ```
 
 This will automatically launch a tab in your local web browser at `http://localhost:8501`.
