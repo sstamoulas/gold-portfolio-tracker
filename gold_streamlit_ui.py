@@ -7,6 +7,40 @@ from gold_ledger_ui import build_ledger_column_config
 from gold_portfolio_math import format_money, get_display_currency_config
 
 
+def render_purchase_form(chosen_currency, suggested_logged_cost, purchase_snapshot, save_callback):
+    with st.sidebar.form("purchase_form", clear_on_submit=True):
+        if chosen_currency == "TRY":
+            label_text = "Logged Cost (in Turkish Lira - TRY)"
+            step_val = 500.0
+        else:
+            label_text = "Logged Cost (in US Dollars - USD)"
+            step_val = 50.0
+
+        st.number_input(
+            label_text,
+            min_value=0.01,
+            value=suggested_logged_cost,
+            step=step_val,
+            key="input_cost_raw",
+        )
+
+        st.number_input(
+            "Purchase USD/TRY rate (auto-filled from purchase date):",
+            min_value=1.0,
+            value=float(purchase_snapshot.usd_try),
+            step=0.01,
+            format="%.4f",
+            key="input_fx",
+        )
+
+        st.caption(
+            "The suggested logged cost refreshes when you change purchase date, grams, or entry currency. "
+            "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
+            "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
+        )
+        st.form_submit_button("➕ Save Permanently to DB", on_click=save_callback)
+
+
 def render_purchase_sidebar(fetch_market_snapshot_for_date, save_callback):
     st.sidebar.header("📝 Log Purchase Records")
     st.sidebar.markdown("Add your transaction details below:")
@@ -59,38 +93,7 @@ def render_purchase_sidebar(fetch_market_snapshot_for_date, save_callback):
     st.sidebar.caption(
         f"Reference-only market close from {purchase_snapshot.gold_source_date} for gold and {purchase_snapshot.fx_source_date} for FX."
     )
-
-    with st.sidebar.form("purchase_form", clear_on_submit=True):
-        if chosen_currency == "TRY":
-            label_text = "Logged Cost (in Turkish Lira - TRY)"
-            step_val = 500.0
-        else:
-            label_text = "Logged Cost (in US Dollars - USD)"
-            step_val = 50.0
-
-        st.number_input(
-            label_text,
-            min_value=0.01,
-            value=suggested_logged_cost,
-            step=step_val,
-            key="input_cost_raw",
-        )
-
-        st.number_input(
-            "Purchase USD/TRY rate (auto-filled from purchase date):",
-            min_value=1.0,
-            value=float(purchase_snapshot.usd_try),
-            step=0.01,
-            format="%.4f",
-            key="input_fx",
-        )
-
-        st.caption(
-            "The suggested logged cost refreshes when you change purchase date, grams, or entry currency. "
-            "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
-            "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
-        )
-        st.form_submit_button("➕ Save Permanently to DB", on_click=save_callback)
+    render_purchase_form(chosen_currency, suggested_logged_cost, purchase_snapshot, save_callback)
 
     return sell_spread_pct
 
