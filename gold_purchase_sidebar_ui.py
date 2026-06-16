@@ -89,7 +89,8 @@ def render_purchase_form(chosen_currency, purchase_date, grams, suggested_logged
         st.caption(
             "The suggested logged cost refreshes when you change purchase date, grams, or entry currency. "
             "This applies only to the row you are saving. You can override it with the exact amount you paid before saving. "
-            "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view."
+            "Gain/loss uses the saved cost basis, and the sell spread applies to every row in the sell-today view. "
+            "The values currently shown in this form are what gets saved."
         )
         submitted = st.form_submit_button("➕ Save Permanently to DB")
         if submitted:
