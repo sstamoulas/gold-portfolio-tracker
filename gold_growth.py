@@ -24,19 +24,26 @@ def add_transaction(p_date, g_weight, c_raw, fx_rate, currency):
     else:
         c_usd, c_try = c_raw, round(c_raw * fx_rate, 2)
     
-    supabase.table("transactions").insert({
+    data = {
         "purchase_date": str(p_date),
-        "grams": g_weight,
-        "cost_try": c_try,
-        "cost_usd": c_usd
-    }).execute()
+        "grams": float(g_weight),
+        "cost_try": float(c_try),
+        "cost_usd": float(c_usd)
+    }
+    response = supabase.table("transactions").insert(data).execute()
+    return response
 
 def get_all_transactions():
     response = supabase.table("transactions").select("*").order("id").execute()
     return pd.DataFrame(response.data)
 
 def delete_transaction(target_id):
-    supabase.table("transactions").delete().eq("id", target_id).execute()
+    try:
+        response = supabase.table("transactions").delete().eq("id", target_id).execute()
+    except Exception as exc:
+        raise RuntimeError(f"Supabase delete failed for transaction ID {target_id}: {exc}") from exc
+
+    return response
 
 # --- CALLBACKS ---
 def add_callback():
@@ -47,45 +54,6 @@ def add_callback():
         st.session_state["input_fx"],
         st.session_state["input_currency"]
     )
-
-# --- MARKET DATA ---
-@st.cache_data(ttl=300)
-def fetch_live_market_data():
-    try:
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
-        tickers = yf.Tickers("GC=F USDTRY=X", session=session)
-        gold_close = tickers.tickers["GC=F"].history(period="1d")["Close"].iloc[-1]
-        try_close = tickers.tickers["USDTRY=X"].history(period="1d")["Close"].iloc[-1]
-        g_usd = gold_close / GRAMS_PER_ONCE
-        return g_usd, g_usd * try_close, try_close, False
-    except:
-        return 75.25, 2445.62, 32.50, True
-
-live_gold_usd, live_gold_try, live_usd_try, is_fallback = fetch_live_market_data()
-
-# --- UI (KEEPING YOUR ORIGINAL DESIGN) ---
-st.title("🪙 Gold Portfolio Tracker (USD & TRY)")
-# ... [Insert your original sidebar code here] ...
-
-# --- PORTFOLIO PROCESSING ---
-df_portfolio = get_all_transactions()
-
-if not df_portfolio.empty:
-    df_portfolio["purchase_date"] = df_portfolio["purchase_date"].astype(str)
-    df_portfolio = df_portfolio.rename(columns={"purchase_date": "Date", "grams": "Grams", "cost_try": "Cost (TRY)", "cost_usd": "Cost (USD)"})
-    
-    # ... [Insert your original logic for columns and KPIs here] ...
-
-    # UPDATED SYNC LOGIC
-    if len(edited_df) < len(display_df):
-        if st.button("🗑️ Sync Deletions to Database"):
-            remaining_ids = set(edited_df["id"].tolist())
-            all_original_ids = set(df_portfolio["id"].tolist())
-            for target_id in (all_original_ids - remaining_ids):
-                delete_transaction(target_id)
-            st.rerun()
-
 
 # ----------------------------------------------------
 # FETCH LIVE MARKET DATA (With anti-rate-limiting headers)
@@ -274,7 +242,7 @@ else:
     # ----------------------------------------------------
     st.subheader("📜 Historical Transaction Ledger")
     st.caption(
-        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**, then sync below."
+        "💡 **To Delete Entries:** Click a row's left checkbox and press **Backspace/Delete**. Deletions are saved automatically."
     )
 
     display_df = df_portfolio.copy()
@@ -297,6 +265,23 @@ else:
         key="ledger_editor",
     )
 
+    deleted_ids = set(display_df["id"].tolist()) - set(edited_df["id"].tolist())
+    if deleted_ids:
+        delete_errors = []
+        for target_id in deleted_ids:
+            try:
+                delete_transaction(target_id)
+            except Exception as exc:
+                delete_errors.append(str(exc))
+
+        if delete_errors:
+            st.error("One or more deletions failed in Supabase. The row(s) will still be present after refresh.")
+            for error_message in delete_errors:
+                st.code(error_message)
+            st.stop()
+
+        st.rerun()
+
     st.markdown("### 🧮 Ledger Totals Summary")
     t_col1, t_col2, t_col3, t_col4, t_col5, t_col6, t_col7 = st.columns(7)
     t_col1.markdown(f"**Total Grams:**\n{total_grams:.2f}g")
@@ -309,20 +294,3 @@ else:
     g_try_color = "green" if growth_try >= 0 else "red"
     t_col6.markdown(f"**Total Growth (USD):**\n<span style='color:{g_usd_color}; font-weight:bold;'>${growth_usd:+,.2f}</span>", unsafe_allow_html=True)
     t_col7.markdown(f"**Total Growth (TRY):**\n<span style='color:{g_try_color}; font-weight:bold;'>{growth_try:+,.2f} TL</span>", unsafe_allow_html=True)
-
-    if len(edited_df) < len(display_df):
-        st.markdown("")
-        col_sync1, col_sync2 = st.columns([1, 4])
-        with col_sync1:
-            if st.button("🗑️ Sync Deletions to Database", use_container_width=True):
-                remaining_ids = set(edited_df["id"].tolist())
-                all_original_ids = set(display_df["id"].tolist())
-                deleted_ids = all_original_ids - remaining_ids
-
-                query = text("DELETE FROM transactions WHERE id = :target_id")
-                with engine.begin() as conn:
-                    for target_id in deleted_ids:
-                        conn.execute(query, {"target_id": target_id})
-
-                st.success("Cloud Database synced successfully!")
-                st.rerun()
