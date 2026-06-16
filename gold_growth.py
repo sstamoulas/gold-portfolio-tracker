@@ -455,6 +455,13 @@ if analysis_df.empty:
 else:
     analysis_df["Date"] = analysis_df["Date"].astype(str)
 
+    display_currency = st.radio(
+        "View currency for chart, summary, and ledger",
+        options=["USD", "TRY"],
+        horizontal=True,
+        key="display_currency",
+    )
+    st.caption("This changes how the results are displayed. It does not change any saved purchase values.")
     currency_cfg = get_display_currency_config(display_currency)
     selected_currency_code = currency_cfg["code"]
     selected_purchase_price_col = currency_cfg["purchase_price_col"]
@@ -471,13 +478,6 @@ else:
     pct_growth = (projected_pl / total_logged_cost) * 100 if total_logged_cost > 0 else 0
 
     st.subheader("📊 Combined Portfolio Performance")
-    display_currency = st.radio(
-        "View currency for chart, summary, and ledger",
-        options=["USD", "TRY"],
-        horizontal=True,
-        key="display_currency",
-    )
-    st.caption("This changes how the results are displayed. It does not change any saved purchase values.")
     kpi1, kpi2, kpi3 = st.columns(3)
     kpi1.metric("Total Weight Owned", f"{total_grams:.2f} grams")
     kpi2.metric(
